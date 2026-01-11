@@ -3,10 +3,11 @@
 Sommmelier Weekly Run
 
 Main entry point for running the full weekly MMM workflow:
-1. Fit the MMM model on Modal GPU
-2. Generate HTML report
-3. Analyze results and generate recommendations
-4. Track model quality over time
+1. Validate data locally (catches errors before GPU spend)
+2. Fit the MMM model on Modal GPU
+3. Generate HTML report
+4. Analyze results and generate recommendations
+5. Track model quality over time
 
 Usage:
     python run_weekly.py data/raw/your_data.csv
@@ -75,7 +76,50 @@ def main():
         "steps": {},
     }
 
-    # Step 1: Run MMM on Modal
+    # Step 1: Validate data locally
+    print(f"\n{'='*60}")
+    print("STEP: Validating data")
+    print(f"{'='*60}")
+
+    try:
+        from mmm.data import load_mmm_data, validate_dataset
+        from mmm.data.validator import check_meridian_compatibility
+
+        dataset = load_mmm_data(data_file)
+        validation = validate_dataset(dataset)
+        compatibility_issues = check_meridian_compatibility(dataset)
+
+        print(validation.summary())
+
+        if compatibility_issues:
+            print("\nMeridian Compatibility Issues:")
+            for issue in compatibility_issues:
+                print(f"  ✗ {issue}")
+
+        results["steps"]["validation"] = {
+            "passed": validation.passed,
+            "errors": validation.errors,
+            "warnings": validation.warnings,
+        }
+
+        if not validation.passed or compatibility_issues:
+            print("\n" + "=" * 60)
+            print("VALIDATION FAILED - Aborting before GPU run")
+            print("=" * 60)
+            print("Fix the errors above and try again.")
+            sys.exit(1)
+
+        if validation.warnings > 0:
+            print(f"\n⚠ {validation.warnings} warning(s) - proceeding anyway")
+        else:
+            print("\n✓ Validation passed")
+
+    except Exception as e:
+        print(f"✗ Validation error: {e}")
+        results["steps"]["validation"] = {"error": str(e)}
+        sys.exit(1)
+
+    # Step 2: Run MMM on Modal
     success, output = run_command(
         ["modal", "run", "modal_mmm_full.py", "--data", str(data_file)],
         "Running MMM model on Modal GPU"
@@ -96,7 +140,7 @@ def main():
     results["results_file"] = str(results_file)
     print(f"\nResults saved to: {results_file}")
 
-    # Step 2: Generate HTML report (via CLI)
+    # Step 3: Generate HTML report (via CLI)
     success, output = run_command(
         ["python", "-m", "mmm.cli.main", "report", str(results_file)],
         "Generating HTML report"
@@ -108,7 +152,7 @@ def main():
         results["report_file"] = str(report_file)
         print(f"Report saved to: {report_file}")
 
-    # Step 3: Run analysis and recommendations (via CLI)
+    # Step 4: Run analysis and recommendations (via CLI)
     success, output = run_command(
         ["python", "-m", "mmm.cli.main", "analyze", str(results_file)],
         "Analyzing results and generating recommendations"
@@ -121,7 +165,7 @@ def main():
     if analysis_file.exists():
         results["analysis_file"] = str(analysis_file)
 
-    # Step 4: Update model quality tracking
+    # Step 5: Update model quality tracking
     print(f"\n{'='*60}")
     print("STEP: Updating model quality tracking")
     print(f"{'='*60}")

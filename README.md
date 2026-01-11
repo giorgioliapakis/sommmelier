@@ -62,11 +62,11 @@ python run_weekly.py data/examples/meridian_sample.csv
 ```
 
 This will:
-1. Upload your data to Modal
+1. Validate your data locally (catches errors before GPU spend)
 2. Fit the MMM on a T4 GPU (~10 minutes)
 3. Generate `outputs/full_results_*.json` with ROI and contributions
 4. Generate `outputs/full_results_*.html` visual report
-5. Generate `outputs/analysis_*.txt` with recommendations
+5. Generate `outputs/analysis_*.md` with recommendations
 6. Update `outputs/model_quality_history.json` for tracking
 
 ### Use Your Own Data
