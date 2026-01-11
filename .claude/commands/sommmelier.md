@@ -45,7 +45,7 @@ Read `outputs/model_quality_history.json` and compare:
 
 ### Step 5: Write Your Analysis
 
-Create a file `outputs/analysis_[DATE].md` with:
+The pipeline creates `outputs/analysis_[DATE].md`. Review and enhance it with:
 
 ```markdown
 # Weekly MMM Analysis - [DATE]

@@ -149,7 +149,7 @@ def analyze(
         console.print(format_report_for_claude(report))
 
         analysis_path = results_path.with_name(
-            results_path.stem.replace("full_results", "analysis") + ".txt"
+            results_path.stem.replace("full_results", "analysis") + ".md"
         )
         analysis_path.write_text(format_report_for_claude(report))
         console.print(f"\nAnalysis saved to: {analysis_path}")

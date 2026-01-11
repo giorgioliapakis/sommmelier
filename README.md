@@ -2,18 +2,31 @@
 
 **AI-driven Marketing Mix Modeling powered by Google Meridian.**
 
-Run Marketing Mix Models autonomously from the command line. GPU-accelerated model fitting, automated analysis, and self-improving quality tracking.
+Built for [Claude Code](https://github.com/anthropics/claude-code). Run MMM models, get automated reports, then let Claude interpret results and write strategic recommendations.
 
-Built on Google's [Meridian](https://github.com/google/meridian) framework. Designed for autonomous operation via [Claude Code](https://github.com/anthropics/claude-code).
+## Claude Code Workflow
+
+```bash
+# In Claude Code, just run:
+/sommmelier
+
+# Or with new data:
+/sommmelier data/raw/your_data.csv
+```
+
+That's it. Claude handles the rest:
+1. Runs MMM on Modal GPU
+2. Reads results and historical context
+3. Writes analysis with strategic recommendations
+
+See [CLAUDE.md](CLAUDE.md) for the full workflow and analysis template.
 
 ## What It Does
 
-1. **Fits MMM models on cloud GPU** - Uses Modal.com for serverless GPU compute (~$0.30/run)
-2. **Generates visual reports** - HTML reports with charts that stakeholders can understand
-3. **Tracks model quality over time** - R-squared, MAPE, and convergence metrics
-4. **Claude-first design** - Claude Code interprets results and writes recommendations
-
-See [CLAUDE.md](CLAUDE.md) for Claude Code workflow instructions.
+1. **Fits MMM models on cloud GPU** - Modal.com serverless compute (~$0.30/run)
+2. **Generates visual reports** - HTML reports with charts for stakeholders
+3. **Tracks model quality** - R-squared, MAPE, convergence over time
+4. **Claude interprets** - Automated data collection + Claude's analysis layer
 
 ## Quick Start
 
@@ -96,7 +109,7 @@ After each run:
 outputs/
 ├── full_results_YYYYMMDD.json    # Raw results (ROI, contributions, metrics)
 ├── full_results_YYYYMMDD.html    # Visual report for stakeholders
-├── analysis_YYYYMMDD.txt         # AI recommendations
+├── analysis_YYYYMMDD.md          # AI recommendations
 ├── model_quality_history.json    # Quality tracking across runs
 └── model_quality_report.txt      # Latest quality assessment
 ```
@@ -132,13 +145,21 @@ Model Health:
 - MAPE < 20% = predictions are accurate
 - Convergence OK = MCMC sampling worked
 
-## CLI Commands
+## Commands
 
-After installing (`pip install -e .`), you can use the `sommmelier` CLI:
+### Claude Code (Recommended)
+
+```bash
+/sommmelier                           # Analyze latest results
+/sommmelier data/raw/your_data.csv    # Run full pipeline on new data
+```
+
+### CLI
+
+After installing (`pip install -e .`):
 
 ```bash
 sommmelier analyze                    # Analyze latest results
-sommmelier analyze results.json       # Analyze specific file
 sommmelier report results.json        # Generate HTML report
 sommmelier quality                    # Show model quality summary
 sommmelier quality --history          # Show full quality history
@@ -160,24 +181,36 @@ sommmelier validate data.csv          # Validate dataset
 │   (CSV)         │     │   (Meridian)    │     │    (JSON)       │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
                                                         │
-                        ┌───────────────────────────────┼───────────────────────────────┐
-                        v                               v                               v
-                ┌─────────────────┐             ┌─────────────────┐             ┌─────────────────┐
-                │  HTML Report    │             │  Recommendations │             │ Quality Tracking │
-                │  (Visualize)    │             │  (Analyze)       │             │ (Improve)        │
-                └─────────────────┘             └─────────────────┘             └─────────────────┘
+              ┌─────────────────────────────────────────┴─────────────────────────────────────────┐
+              │                              AUTOMATED LAYER                                       │
+              │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐               │
+              │  │  HTML Report    │    │ Quality Metrics │    │ History Tracking │               │
+              │  │  (Charts)       │    │ (R², MAPE)      │    │ (Week/Week)      │               │
+              │  └─────────────────┘    └─────────────────┘    └─────────────────┘               │
+              └───────────────────────────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        v
+              ┌───────────────────────────────────────────────────────────────────────────────────┐
+              │                              CLAUDE LAYER                                          │
+              │  - Reads results + history                                                         │
+              │  - Compares to previous runs                                                       │
+              │  - Writes strategic recommendations                                                │
+              │  - Identifies model health issues                                                  │
+              └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Self-Improving Loop
+The key insight: automated systems collect data and produce charts. Claude interprets what it means and what to do about it.
 
-Each week when you run the model:
+## Weekly Workflow
 
-1. **Fit** - New model with latest data
-2. **Compare** - Week-over-week ROI changes
-3. **Track** - R-squared and MAPE trends
-4. **Recommend** - If model quality degrades, get suggestions to fix it
+Each week when you run `/sommmelier`:
 
-The system tracks whether the model is improving or degrading over time, so you can trust the recommendations.
+1. **Fit** - New model runs on Modal GPU with latest data
+2. **Report** - HTML report generated with charts and metrics
+3. **Track** - Quality metrics logged to history
+4. **Analyze** - Claude reads everything, writes recommendations
+
+Claude compares week-over-week changes, identifies issues, and writes strategic recommendations you can act on.
 
 ## Cost
 
@@ -188,17 +221,21 @@ The system tracks whether the model is improving or degrading over time, so you 
 
 ```
 sommmelier/
+├── .claude/
+│   └── commands/
+│       └── sommmelier.md  # /sommmelier slash command
 ├── mmm/
 │   ├── cli/               # CLI commands
 │   ├── data/              # Data loading & validation
 │   ├── model/             # Meridian wrapper
 │   ├── analysis/          # Insights & visualization
-│   ├── recommendations/   # AI recommendation engine
+│   ├── recommendations/   # Recommendation engine
 │   └── tracking/          # Model quality tracking
 ├── data/
 │   ├── raw/               # Your data (gitignored)
 │   └── examples/          # Sample datasets
 ├── outputs/               # Results (gitignored)
+├── CLAUDE.md              # Claude Code instructions
 ├── run_weekly.py          # Main entry point
 └── modal_mmm_full.py      # GPU model fitting
 ```
@@ -219,6 +256,6 @@ MIT
 
 ## Acknowledgments
 
-- [Google Meridian](https://github.com/google/meridian) - The underlying Bayesian MMM framework
+- [Claude Code](https://github.com/anthropics/claude-code) - The AI that interprets results and writes recommendations
+- [Google Meridian](https://github.com/google/meridian) - Bayesian MMM framework
 - [Modal](https://modal.com) - Serverless GPU compute
-- Built with [Claude Code](https://github.com/anthropics/claude-code)

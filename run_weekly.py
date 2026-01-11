@@ -116,7 +116,7 @@ def main():
     results["steps"]["analysis"] = {"success": success, "output": output}
 
     analysis_file = results_file.with_name(
-        results_file.stem.replace("full_results", "analysis") + ".txt"
+        results_file.stem.replace("full_results", "analysis") + ".md"
     )
     if analysis_file.exists():
         results["analysis_file"] = str(analysis_file)
