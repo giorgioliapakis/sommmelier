@@ -1,0 +1,2 @@
+date,geo,conversions,revenue,meta_spend,meta_impressions,google_spend,google_impressions,tiktok_spend,tiktok_impressions,twitter_spend,twitter_impressions,influencer_spend,is_holiday,product_launch
+YYYY-MM-DD,COUNTRY_CODE,INTEGER,FLOAT,FLOAT,INTEGER,FLOAT,INTEGER,FLOAT,INTEGER,FLOAT,INTEGER,FLOAT,0_OR_1,0_OR_1
