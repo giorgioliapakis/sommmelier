@@ -1,99 +1,103 @@
 # Sommmelier
 
-**AI-driven Marketing Mix Modeling powered by Google Meridian.**
+**An MMM data scientist in your terminal.**
 
-Built for [Claude Code](https://github.com/anthropics/claude-code). Run MMM models, get automated reports, then let Claude interpret results and write strategic recommendations.
+Sommmelier runs Bayesian Marketing Mix Models on GPU, interprets the results in your business context, and tells you what to change to make the model more accurate next time.
 
-## Claude Code Workflow
+Built on [Google Meridian](https://github.com/google/meridian). Runs on GPU via [Modal](https://modal.com) (~$0.30/run). Designed to work with [Claude Code](https://claude.ai/download).
 
-```bash
-# In Claude Code, just run:
-/sommmelier
+## What it does
 
-# Or with new data:
-/sommmelier data/raw/your_data.csv
-```
+1. **Fits MMM models on cloud GPU** via Modal.com (~$0.30/run)
+2. **Generates visual reports** with charts for stakeholders
+3. **Tracks model quality** (R-squared, MAPE, convergence) over time
+4. **Coaches you through improvements** like a data scientist would
 
-That's it. Claude handles the rest:
-1. Runs MMM on Modal GPU
-2. Reads results and historical context
-3. Writes analysis with strategic recommendations
+After each run, the system analyzes 11 diagnostics and tells you specifically what to change:
 
-See [CLAUDE.md](CLAUDE.md) for the full workflow and analysis template.
+- "Meta's CI is too wide. Run a 4-week geo holdout in 3 states to calibrate."
+- "Add a holiday control variable. The model is attributing promo lifts to ad spend."
+- "Brand search shows 8x ROI, but it's probably capturing demand other channels created."
+- "You have 5 channels but only 2 geos. More geographic granularity would help."
+- "R-squared dropped from 0.78 to 0.65. Investigate a structural break in the data."
 
-## What It Does
+Suggestions are tracked across runs. Act on one, re-run, and see whether it helped.
 
-1. **Fits MMM models on cloud GPU** - Modal.com serverless compute (~$0.30/run)
-2. **Generates visual reports** - HTML reports with charts for stakeholders
-3. **Tracks model quality** - R-squared, MAPE, convergence over time
-4. **Claude interprets** - Automated data collection + Claude's analysis layer
-
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
 - Python 3.11 or 3.12
-- [Modal](https://modal.com) account (free tier available)
+- A [Modal](https://modal.com) account (free tier available, this is where the model runs on GPU)
+- [Claude Code](https://claude.ai/download) (recommended, acts as your MMM analyst)
 
-### Installation
+### Install
 
 ```bash
-# Clone the repo
 git clone https://github.com/giorgioliapakis/sommmelier.git
 cd sommmelier
-
-# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 pip install -e .
 
-# Authenticate with Modal
+# Set up Modal for GPU access
 pip install modal
 modal setup
 ```
 
-### Run Your First Model
+### Option A: Guided experience (Claude Code)
+
+If you have [Claude Code](https://claude.ai/download), open it in this project directory:
 
 ```bash
-# Test with sample data
-python run_weekly.py data/examples/meridian_sample.csv
+# 1. Start Claude Code in the project
+claude
+
+# 2. Set up your brand context (guided conversation)
+/init
+
+# 3. Try with example data first
+/walkthrough
+
+# 4. Or run on your own data
+/sommmelier data/raw/your_data.csv
 ```
 
-This will:
-1. Validate your data locally (catches errors before GPU spend)
-2. Fit the MMM on a T4 GPU (~10 minutes)
-3. Generate `outputs/full_results_*.json` with ROI and contributions
-4. Generate `outputs/full_results_*.html` visual report
-5. Generate `outputs/analysis_*.md` with recommendations
-6. Update `outputs/model_quality_history.json` for tracking
+`/init` asks about your brand, channels, KPIs, and goals. It saves everything to `context/` files that make future analysis specific to your situation, and adjusts how technical or hand-holdy it is based on your experience level.
 
-### Use Your Own Data
+`/sommmelier` runs the model (or analyzes existing results), reads your brand context, and writes recommendations that reference your specific goals and constraints.
+
+### Option B: CLI only
+
+The pipeline works without Claude Code:
 
 ```bash
-# Put your data in data/raw/
-cp your_marketing_data.csv data/raw/
+# Validate your data
+sommmelier validate data/raw/your_data.csv
 
-# Run the model
-python run_weekly.py data/raw/your_marketing_data.csv
+# Run the full pipeline (validate → fit on GPU → report → analyze → track)
+python run_weekly.py data/raw/your_data.csv
+
+# View results
+sommmelier analyze                    # Latest analysis
+sommmelier report results.json        # Generate HTML report
+sommmelier quality --history          # Model quality over time
 ```
 
-## Data Format
+You get the same model results, reports, and automated recommendations, just without the brand-context personalization that Claude Code adds.
 
-Your CSV needs these columns:
+## What you provide
 
-| Column | Required | Description | Example |
-|--------|----------|-------------|---------|
-| `date` or `time` | Yes | Time period | `2024-01-01` |
-| `geo` | Yes | Geographic region | `US`, `UK`, `AU` |
-| `conversions` | Yes | Your KPI | `1523` |
-| `{channel}_spend` | Yes | Spend per channel | `meta_spend`, `google_spend` |
-| `{channel}_impression` | No | Impressions (estimated from spend if missing) | `meta_impression` |
-| `population` | No | Geo population (uses defaults if missing) | `330000000` |
-| `{name}_control` | No | Control variables | `seasonality_control` |
+### The dataset (required)
 
-### Minimum Data Requirements
+A CSV with weekly marketing data. At minimum:
+
+| Column | Required | Example |
+|--------|----------|---------|
+| `date` or `time` | Yes | `2024-01-01` |
+| `geo` | Yes | `US`, `UK`, `AU` |
+| `conversions` | Yes | `1523` |
+| `{channel}_spend` | Yes | `meta_spend`, `google_spend` |
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
@@ -101,150 +105,164 @@ Your CSV needs these columns:
 | Geographies | 1 | 5+ |
 | Media channels | 2 | 3-7 |
 
-## Output Files
+### Things that improve the model (optional but recommended)
 
-After each run:
+The system tells you which of these matter most for your situation. You don't need all of them upfront. Start with what you have.
+
+**Impression data** (`{channel}_impression` columns). Without this, the model estimates impressions from spend at $10 CPM. Real impressions are better.
+
+**Control variables** (columns ending in `_control`, or named `is_holiday`, `product_launch`, etc.). These help the model separate marketing effects from other things that drive conversions:
+
+| Control | What it captures | Format |
+|---------|-----------------|--------|
+| `is_holiday` | Holiday periods (Black Friday, Christmas, etc.) | 0 or 1 |
+| `product_launch` | New product/feature releases | 0 or 1 |
+| `is_promotion` | Sale events and discount periods | 0 or 1 |
+| `seasonality_control` | Business seasonality index | 0.0 to 1.0 |
+| `competitor_control` | Major competitor activity | 0 or 1 |
+
+These are NOT auto-detected. You add them as columns to your CSV. The model picks them up automatically if they follow the naming convention above.
+
+**Calibration data** (`data/calibration.json`). This tells the model what you already know about channel performance. Three sources, in order of value:
+
+1. **Incrementality experiments** (strongest). Geo-lift tests, holdout experiments, or platform lift studies. These dramatically tighten confidence intervals. The system will recommend which channels to test and how.
+
+2. **Platform-reported metrics** (useful as a ceiling). What Meta Ads Manager or Google Ads reports as your ROAS or CPA. The model treats these as a soft upper bound since platforms tend to overclaim by 2-5x. You provide these numbers during `/init` or by editing `data/calibration.json` directly.
+
+3. **Your team's beliefs** (better than nothing). "We think Meta returns about 1-2x" with a confidence level. Even rough estimates beat the model's default (wide-open priors centered around 1x).
+
+See [`data/calibration_example.json`](data/calibration_example.json) for the format.
+
+### What the system recommends you add
+
+After each model run, the system runs 11 diagnostic checks and tells you what would help most:
+
+| What it checks | Example |
+|----------------|---------|
+| Wide confidence intervals | "Meta's CI is too wide. Run a 4-week geo holdout in 3 states." |
+| Poor model fit | "R-squared is 0.55. Add holiday and promotion columns to explain the missing variance." |
+| Missing calibration | "What does Google Ads report as your conversion count? This sets an upper bound." |
+| Short data history | "You have 30 weeks of data. Each additional quarter improves estimates by 10-20%." |
+| Aggregated channels | "Your 'social' channel should be split into Meta and TikTok." |
+| Budget concentration | "Meta is 80% of your spend. The model can barely measure Google and TikTok." |
+| Brand search inflation | "Brand search shows 8x ROI, but it may be capturing demand that other channels created." |
+| Organic baseline sanity | "The model says 85% of conversions are organic. Does that match your intuition?" |
+| Adstock misspecification | "TikTok's ad effect decays instantly in the model. Is your product really an impulse buy?" |
+| Geographic signal | "You have 5 channels but only 2 geos. Add more regions so the model can separate effects." |
+| Prior-posterior divergence | "Google's ROI estimate is near zero despite platform data showing 2x. Re-examine priors." |
+
+These are prioritized by impact and tracked across runs. Act on a suggestion, re-run the model, and the system compares before and after.
+
+See [`data/examples/sample_data.csv`](data/examples/sample_data.csv) for a complete example with impression data, holiday flags, and product launch controls.
+
+## How it works
 
 ```
-outputs/
-├── full_results_YYYYMMDD.json    # Raw results (ROI, contributions, metrics)
-├── full_results_YYYYMMDD.html    # Visual report for stakeholders
-├── analysis_YYYYMMDD.md          # AI recommendations
-├── model_quality_history.json    # Quality tracking across runs
-└── model_quality_report.txt      # Latest quality assessment
+    FIRST RUN                          ONGOING
+    ─────────                          ───────
+
+    /init                              /sommmelier
+     │                                  │
+     ├─ Brand context                   ├─ Fit model on GPU
+     ├─ Data assessment      ┌─────>    ├─ Interpret results
+     ├─ Prior calibration    │          ├─ Compare to last run
+     └─ Ready to run ────────┘          ├─ Write recommendations
+                                        ├─ Suggest improvements ──┐
+                                        └─ Update learnings       │
+                                                                  │
+                                        ┌─────────────────────────┘
+                                        │
+                                        v
+                              "Add holiday controls"
+                              "Run geo holdout for Meta"
+                              "Split social → Meta + TikTok"
+                              "Prior-posterior divergence on Google"
+                                        │
+                                        │  you act on suggestions
+                                        │
+                                        └─────> /sommmelier (next run)
+                                                model gets more accurate
 ```
 
-## Understanding the Results
+Each run produces reports and recommendations. The useful part is the loop: change something, re-run, see if it helped.
 
-### ROI (Return on Investment)
+## Understanding results
+
+### Channel ROI
 ```
 Channel ROI:
   meta   : 0.85x  (90% CI: 0.52 - 1.21)
   google : 1.42x  (90% CI: 0.89 - 2.05)
 ```
-- ROI > 1.0 = profitable
-- 90% CI = confidence interval (narrower = more certain)
+- **> 1.5x**: Strong performer, consider scaling
+- **1.0 - 1.5x**: Profitable, maintain or test scaling
+- **< 1.0x**: Underperforming, needs investigation
 
-### Marginal ROI
+### Marginal vs average ROI
 ```
 Marginal ROI (at current spend):
-  meta   : 0.45x  <- Lower than avg = saturated
-  google : 1.65x  <- Higher than avg = room to grow
+  meta   : 0.45x  <- saturated (marginal < average)
+  google : 1.65x  <- room to grow (marginal > average)
 ```
-- If marginal ROI < average ROI, you're hitting diminishing returns
-- If marginal ROI > average ROI, you can scale spend efficiently
+Marginal ROI tells you where your next dollar is best spent. If it's lower than the average ROI for that channel, you're hitting diminishing returns.
 
-### Model Quality Metrics
+### Model quality
 ```
-Model Health:
-  R-squared: 0.72 (Good)
-  MAPE: 12.3% (Good)
-  Convergence: OK
+R-squared: 0.72 (Good)     MAPE: 12.3% (Good)     Convergence: OK
 ```
-- R-squared > 0.6 = model explains variance well
-- MAPE < 20% = predictions are accurate
-- Convergence OK = MCMC sampling worked
+- **R-squared > 0.6**: Model explains the data well
+- **MAPE < 20%**: Predictions are accurate
+- **Convergence OK**: Bayesian sampling worked correctly
 
-## Commands
+## Output files
 
-### Claude Code (Recommended)
-
-```bash
-/sommmelier                           # Analyze latest results
-/sommmelier data/raw/your_data.csv    # Run full pipeline on new data
-```
-
-### CLI
-
-After installing (`pip install -e .`):
-
-```bash
-sommmelier analyze                    # Analyze latest results
-sommmelier report results.json        # Generate HTML report
-sommmelier quality                    # Show model quality summary
-sommmelier quality --history          # Show full quality history
-sommmelier validate data.csv          # Validate dataset
-```
-
-### Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `run_weekly.py` | Full pipeline: fit model -> report -> analyze -> track |
-| `modal_mmm_full.py` | Modal function for GPU model fitting |
-
-## How It Works
+Each run produces:
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Your Data     │────>│   Modal GPU     │────>│    Results      │
-│   (CSV)         │     │   (Meridian)    │     │    (JSON)       │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                        │
-              ┌─────────────────────────────────────────┴─────────────────────────────────────────┐
-              │                              AUTOMATED LAYER                                       │
-              │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐               │
-              │  │  HTML Report    │    │ Quality Metrics │    │ History Tracking │               │
-              │  │  (Charts)       │    │ (R², MAPE)      │    │ (Week/Week)      │               │
-              │  └─────────────────┘    └─────────────────┘    └─────────────────┘               │
-              └───────────────────────────────────────────────────────────────────────────────────┘
-                                                        │
-                                                        v
-              ┌───────────────────────────────────────────────────────────────────────────────────┐
-              │                              CLAUDE LAYER                                          │
-              │  - Reads results + history                                                         │
-              │  - Compares to previous runs                                                       │
-              │  - Writes strategic recommendations                                                │
-              │  - Identifies model health issues                                                  │
-              └───────────────────────────────────────────────────────────────────────────────────┘
+outputs/
+├── full_results_YYYYMMDD.json    # Raw results (ROI, contributions, model fit)
+├── full_results_YYYYMMDD.html    # Visual report for stakeholders
+├── analysis_YYYYMMDD.md          # AI-generated recommendations
+├── model_quality_history.json    # Quality metrics across all runs
+└── model_quality_report.txt      # Latest quality assessment
 ```
 
-The key insight: automated systems collect data and produce charts. Claude interprets what it means and what to do about it.
-
-## Weekly Workflow
-
-Each week when you run `/sommmelier`:
-
-1. **Fit** - New model runs on Modal GPU with latest data
-2. **Report** - HTML report generated with charts and metrics
-3. **Track** - Quality metrics logged to history
-4. **Analyze** - Claude reads everything, writes recommendations
-
-Claude compares week-over-week changes, identifies issues, and writes strategic recommendations you can act on.
-
-## Cost
-
-- **Modal GPU**: ~$0.30-0.50 per run (T4 GPU for 10-15 minutes)
-- **No subscription fees** - pay only for compute you use
-
-## Project Structure
+## Project structure
 
 ```
 sommmelier/
-├── .claude/
-│   └── commands/
-│       └── sommmelier.md  # /sommmelier slash command
-├── mmm/
-│   ├── cli/               # CLI commands
-│   ├── data/              # Data loading & validation
-│   ├── model/             # Meridian wrapper
-│   ├── analysis/          # Insights & visualization
-│   ├── recommendations/   # Recommendation engine
-│   └── tracking/          # Model quality tracking
+├── .claude/commands/          # Claude Code slash commands
+│   ├── init.md                #   /init (onboarding)
+│   ├── sommmelier.md          #   /sommmelier (analysis)
+│   └── walkthrough.md         #   /walkthrough (guided demo)
+├── context/                   # Brand-specific knowledge (created by /init)
+├── mmm/                       # Core Python package
+│   ├── cli/                   #   CLI commands
+│   ├── data/                  #   Data loading, validation, schemas
+│   ├── model/                 #   Meridian model wrapper
+│   ├── analysis/              #   Visualization and report generation
+│   ├── recommendations/       #   Recommendation engine + improvement advisor
+│   ├── calibration/           #   Prior calibration (experiments, platform, beliefs)
+│   └── tracking/              #   Model quality tracking over time
 ├── data/
-│   ├── raw/               # Your data (gitignored)
-│   └── examples/          # Sample datasets
-├── outputs/               # Results (gitignored)
-├── CLAUDE.md              # Claude Code instructions
-├── run_weekly.py          # Main entry point
-└── modal_mmm_full.py      # GPU model fitting
+│   ├── raw/                   #   Your data (gitignored)
+│   └── examples/              #   Sample datasets
+├── outputs/                   #   Model results (gitignored)
+├── CLAUDE.md                  #   Instructions for the AI analyst
+├── run_weekly.py              #   Full pipeline: validate → fit → report → analyze
+└── modal_mmm_full.py          #   GPU model fitting (runs on Modal)
 ```
+
+## Cost
+
+~$0.30-0.50 per model run (T4 GPU, 10-15 minutes). No subscriptions, pay only for compute you use.
 
 ## Limitations
 
-- Requires Modal account for GPU access
-- Meridian requires 26+ weeks of data for reliable estimates
-- Wide confidence intervals with sparse data
+- Requires a [Modal](https://modal.com) account for GPU access (no local GPU support yet)
+- Needs 26+ weeks of weekly data for reliable estimates (52+ recommended)
+- Confidence intervals widen with sparse data or few geos
+- Currently supports weekly granularity only
 
 ## Contributing
 
@@ -256,6 +274,6 @@ MIT
 
 ## Acknowledgments
 
-- [Claude Code](https://github.com/anthropics/claude-code) - The AI that interprets results and writes recommendations
-- [Google Meridian](https://github.com/google/meridian) - Bayesian MMM framework
-- [Modal](https://modal.com) - Serverless GPU compute
+- [Google Meridian](https://github.com/google/meridian) for Bayesian MMM
+- [Modal](https://modal.com) for serverless GPU compute
+- [Claude Code](https://claude.ai/download) for the AI analyst layer
