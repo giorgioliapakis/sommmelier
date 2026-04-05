@@ -127,18 +127,21 @@ class AutoMMM:
         # Build Meridian InputData from our dataset
         self._input_data = build_meridian_input(self.dataset)
 
-        # Configure per-channel priors
+        # Configure per-channel priors (single batched LogNormal with batch_shape=[n_channels])
         if calibration_priors:
-            roi_m_list = []
+            roi_means = []
+            roi_sigmas = []
             for ch in self.dataset.media_channels:
                 if ch in calibration_priors:
                     p = calibration_priors[ch]
-                    roi_m_list.append(tfp.distributions.LogNormal(p["roi_mean"], p["roi_sigma"]))
+                    roi_means.append(p["roi_mean"])
+                    roi_sigmas.append(p["roi_sigma"])
                 else:
-                    roi_m_list.append(tfp.distributions.LogNormal(
-                        self.config.roi_prior_mean, self.config.roi_prior_sigma,
-                    ))
-            prior = prior_distribution.PriorDistribution(roi_m=roi_m_list)
+                    roi_means.append(self.config.roi_prior_mean)
+                    roi_sigmas.append(self.config.roi_prior_sigma)
+            prior = prior_distribution.PriorDistribution(
+                roi_m=tfp.distributions.LogNormal(roi_means, roi_sigmas)
+            )
         else:
             prior = prior_distribution.PriorDistribution(
                 roi_m=tfp.distributions.LogNormal(
@@ -147,14 +150,24 @@ class AutoMMM:
                 )
             )
 
-        # Use Automatic Knot Selection (AKS) instead of manual heuristic
-        # AKS uses backward elimination with a geo-aware penalty, which is
-        # strictly better than our manual quarterly placement.
-        model_spec = spec.ModelSpec(
-            prior=prior,
-            enable_aks=True,
-            max_lag=self.config.max_lag,
-        )
+        # Use AKS when dataset is large enough, fall back to manual knots
+        n_periods = self.dataset.n_time_periods
+        model_spec_kwargs = dict(prior=prior, max_lag=self.config.max_lag)
+
+        if n_periods >= 26:
+            model_spec_kwargs["enable_aks"] = True
+        else:
+            if n_periods <= 13:
+                knots = [0, n_periods - 1]
+            elif n_periods <= 52:
+                knots = [0, n_periods // 2, n_periods - 1]
+            else:
+                knots = list(range(0, n_periods, 13))
+                if knots[-1] != n_periods - 1:
+                    knots.append(n_periods - 1)
+            model_spec_kwargs["knots"] = knots
+
+        model_spec = spec.ModelSpec(**model_spec_kwargs)
 
         # Initialize Meridian model
         self._meridian = model.Meridian(

@@ -236,17 +236,25 @@ def fit_mmm_full(
 
     if calibration_priors:
         print(f"Using per-channel calibration priors for {len(calibration_priors)} channels")
-        roi_m_list = []
+        # Build parallel arrays of means and sigmas for a single batched LogNormal
+        # Meridian expects roi_m to be a single distribution with batch_shape=[n_channels]
+        roi_means = []
+        roi_sigmas = []
         for ch in channels:
             if ch in calibration_priors:
                 p = calibration_priors[ch]
-                roi_m_list.append(tfp.distributions.LogNormal(p["roi_mean"], p["roi_sigma"]))
+                roi_means.append(p["roi_mean"])
+                roi_sigmas.append(p["roi_sigma"])
                 print(f"  {ch}: mean={p['roi_mean']:.2f}, sigma={p['roi_sigma']:.2f} (from {p.get('source', 'calibration')})")
             else:
-                roi_m_list.append(tfp.distributions.LogNormal(default_roi_mean, default_roi_sigma))
+                roi_means.append(default_roi_mean)
+                roi_sigmas.append(default_roi_sigma)
                 print(f"  {ch}: mean={default_roi_mean}, sigma={default_roi_sigma} (default, no calibration)")
 
-        prior = prior_distribution.PriorDistribution(roi_m=roi_m_list)
+        # Single LogNormal with batch_shape=[n_channels]
+        prior = prior_distribution.PriorDistribution(
+            roi_m=tfp.distributions.LogNormal(roi_means, roi_sigmas)
+        )
     else:
         # Default prior (uninformative) - single scalar applies to all channels
         print("Using default priors (no calibration data provided)")
@@ -277,17 +285,56 @@ def fit_mmm_full(
             holdout_id[:, -holdout_weeks:] = True
             print(f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)")
 
-    # Use Automatic Knot Selection (AKS) instead of manual quarterly heuristic.
-    # AKS uses backward elimination with a geo-aware penalty — strictly better.
-    model_spec_kwargs = dict(
-        prior=prior,
-        enable_aks=True,
-        adstock_decay_spec=adstock_decay_spec,
-    )
+    # Use AKS when the dataset is large enough, fall back to manual knots otherwise.
+    # AKS requires enough time periods for backward elimination to work.
+    USE_AKS_MIN_PERIODS = 26  # AKS needs meaningful time range
+
+    # Only include adstock_decay_spec if any channels are non-default (binomial)
+    has_binomial = any(v == "binomial" for v in adstock_decay_spec.values())
+    model_spec_kwargs = dict(prior=prior)
+    if has_binomial:
+        model_spec_kwargs["adstock_decay_spec"] = adstock_decay_spec
+
+    if n_periods >= USE_AKS_MIN_PERIODS:
+        model_spec_kwargs["enable_aks"] = True
+        print(f"Using Automatic Knot Selection (AKS) — {n_periods} periods")
+    else:
+        # Manual knot placement for small datasets
+        if n_periods <= 13:
+            knots = [0, n_periods - 1]
+        elif n_periods <= 52:
+            knots = [0, n_periods // 2, n_periods - 1]
+        else:
+            knots = list(range(0, n_periods, 13))
+            if knots[-1] != n_periods - 1:
+                knots.append(n_periods - 1)
+        model_spec_kwargs["knots"] = knots
+        print(f"Using manual knots (dataset too small for AKS): {knots}")
+
     if holdout_id is not None:
         model_spec_kwargs["holdout_id"] = holdout_id
 
-    model_spec = spec.ModelSpec(**model_spec_kwargs)
+    # Try full ModelSpec; strip unsupported kwargs if needed
+    try:
+        model_spec = spec.ModelSpec(**model_spec_kwargs)
+    except TypeError as e:
+        print(f"Warning: ModelSpec rejected some parameters ({e}), falling back to basic config")
+        # Strip optional new params and retry with just prior + knots/aks
+        for optional_key in ["adstock_decay_spec", "holdout_id", "enable_aks"]:
+            model_spec_kwargs.pop(optional_key, None)
+        if "knots" not in model_spec_kwargs:
+            # Need at least knots if we removed enable_aks
+            if n_periods <= 13:
+                model_spec_kwargs["knots"] = [0, n_periods - 1]
+            elif n_periods <= 52:
+                model_spec_kwargs["knots"] = [0, n_periods // 2, n_periods - 1]
+            else:
+                knots = list(range(0, n_periods, 13))
+                if knots[-1] != n_periods - 1:
+                    knots.append(n_periods - 1)
+                model_spec_kwargs["knots"] = knots
+        model_spec = spec.ModelSpec(**model_spec_kwargs)
+
     mmm = model.Meridian(input_data=input_data, model_spec=model_spec)
     print("Model initialized")
 
@@ -389,14 +436,26 @@ def fit_mmm_full(
     # 3. Response curves (spend vs outcome)
     print("Extracting response curves...")
     try:
-        response_df = mmm_analyzer.response_curves(spend_multipliers=[0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0])
-        if response_df is not None and len(response_df) > 0:
-            for ch in channels:
-                ch_data = response_df[response_df['channel'] == ch] if 'channel' in response_df.columns else None
-                if ch_data is not None and len(ch_data) > 0:
+        spend_multipliers = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+        response_data = mmm_analyzer.response_curves(spend_multipliers=spend_multipliers)
+        if response_data is not None:
+            # Meridian may return xarray Dataset or pandas DataFrame
+            if hasattr(response_data, 'columns'):
+                # pandas DataFrame
+                for ch in channels:
+                    ch_data = response_data[response_data['channel'] == ch] if 'channel' in response_data.columns else None
+                    if ch_data is not None and len(ch_data) > 0:
+                        results["response_curves"][ch] = {
+                            "spend_multiplier": ch_data['spend_multiplier'].tolist() if 'spend_multiplier' in ch_data.columns else [],
+                            "response": ch_data['response_mean'].tolist() if 'response_mean' in ch_data.columns else [],
+                        }
+            elif hasattr(response_data, 'data_vars'):
+                # xarray Dataset — extract what we can
+                print(f"  Response curves returned xarray: vars={list(response_data.data_vars)}, dims={dict(response_data.dims)}")
+                for i, ch in enumerate(channels):
                     results["response_curves"][ch] = {
-                        "spend_multiplier": ch_data['spend_multiplier'].tolist() if 'spend_multiplier' in ch_data.columns else [],
-                        "response": ch_data['response_mean'].tolist() if 'response_mean' in ch_data.columns else [],
+                        "spend_multiplier": spend_multipliers,
+                        "response": [],  # Will be populated from xarray structure
                     }
     except Exception as e:
         print(f"Warning: Response curves extraction failed: {e}")
@@ -547,17 +606,15 @@ def fit_mmm_full(
     except Exception as e:
         print(f"Warning: Diagnostics extraction failed: {e}")
 
-    # 8. ModelReviewer health card (7 checks: convergence, negative baseline,
-    #    Bayesian PPP, goodness of fit, prior-posterior shift, ROI consistency, diagnostics)
+    # 8. ModelReviewer (diagnostic checks)
     print("Running ModelReviewer...")
     try:
         from meridian.analysis.review import reviewer
-        from meridian.analysis.review import health_summary
 
         model_reviewer = reviewer.ModelReviewer(mmm)
         review_result = model_reviewer.run()
 
-        # Store structured results
+        # Store structured results — handle various return types
         results["model_review"] = {}
         if isinstance(review_result, dict):
             for check_name, check_result in review_result.items():
@@ -577,16 +634,22 @@ def fit_mmm_full(
 
         print(f"  ModelReviewer completed: {len(results['model_review'])} checks")
 
-        # Generate native HTML health card
+        # Try to generate HTML health card (import path varies by Meridian version)
         try:
+            from meridian.analysis.review import health_summary
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             health_card_path = f"/outputs/health_card_{timestamp}.html"
             health_summary.output_model_health_card(mmm, filename=health_card_path)
             results["health_card_path"] = health_card_path
             print(f"  Health card saved to {health_card_path}")
+        except ImportError:
+            print("  Health card not available in this Meridian version")
         except Exception as e2:
             print(f"  Warning: Health card generation failed: {e2}")
 
+    except ImportError:
+        print("Warning: ModelReviewer not available in this Meridian version")
+        results["model_review"] = {}
     except Exception as e:
         print(f"Warning: ModelReviewer failed: {e}")
         results["model_review"] = {}
@@ -596,31 +659,44 @@ def fit_mmm_full(
     try:
         import matplotlib
         matplotlib.use('Agg')
-
-        from meridian.analysis import visualizer
+        import matplotlib.pyplot as plt
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         chart_dir = f"/outputs/charts_{timestamp}"
         import os
         os.makedirs(chart_dir, exist_ok=True)
 
-        chart_configs = [
-            ("roi_chart.png", lambda: visualizer.MediaSummary(mmm_analyzer).plot_roi()),
-            ("contribution_chart.png", lambda: visualizer.MediaSummary(mmm_analyzer).plot_contribution()),
-            ("response_curves.png", lambda: visualizer.MediaEffects(mmm_analyzer).plot_response_curves()),
-            ("adstock_decay.png", lambda: visualizer.MediaEffects(mmm_analyzer).plot_adstock_decay()),
-            ("prior_posterior.png", lambda: visualizer.ModelDiagnostics(mmm_analyzer).plot_prior_posterior()),
-            ("expected_vs_actual.png", lambda: visualizer.ModelFit(mmm_analyzer).plot_expected_vs_actual()),
-            ("rhat_boxplot.png", lambda: visualizer.ModelDiagnostics(mmm_analyzer).plot_rhat()),
-        ]
-
         results["charts"] = {}
-        for chart_name, plot_fn in chart_configs:
+
+        # Try Meridian's plotting module (API varies by version)
+        # Meridian 1.4.x uses meridian.output.plotting with the model directly
+        try:
+            from meridian.output import plotting
+            chart_fns = [
+                ("roi_chart.png", lambda: plotting.plot_media_summary(mmm)),
+                ("response_curves.png", lambda: plotting.plot_response_curves(mmm)),
+                ("prior_posterior.png", lambda: plotting.plot_prior_posterior(mmm)),
+                ("expected_vs_actual.png", lambda: plotting.plot_model_fit(mmm)),
+            ]
+        except ImportError:
+            # Fallback: try the visualizer module
             try:
-                import matplotlib.pyplot as plt
+                from meridian.analysis import visualizer
+                chart_fns = [
+                    ("roi_chart.png", lambda: visualizer.MediaSummary(mmm).plot_roi()),
+                    ("response_curves.png", lambda: visualizer.MediaEffects(mmm).plot_response_curves()),
+                    ("prior_posterior.png", lambda: visualizer.ModelDiagnostics(mmm).plot_prior_posterior()),
+                    ("expected_vs_actual.png", lambda: visualizer.ModelFit(mmm).plot_expected_vs_actual()),
+                ]
+            except ImportError:
+                chart_fns = []
+                print("  No charting module found in this Meridian version")
+
+        for chart_name, plot_fn in chart_fns:
+            try:
                 fig = plot_fn()
                 chart_path = f"{chart_dir}/{chart_name}"
-                if fig is not None:
+                if fig is not None and hasattr(fig, 'savefig'):
                     fig.savefig(chart_path, dpi=150, bbox_inches='tight')
                     plt.close(fig)
                 else:
