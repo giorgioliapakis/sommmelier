@@ -83,48 +83,90 @@ def fit_mmm_full(
 
     print(f"Loaded data: {len(df)} rows, {df['geo'].nunique()} geos, {df['time'].nunique()} periods")
 
-    # Auto-detect channels from spend columns
-    # Handle both formats: 'meta_spend' and 'Channel0_spend'
-    spend_cols = [col for col in df.columns if '_spend' in col.lower()]
-    channels = []
-    impression_cols = []
+    # ─── Auto-detect channels and variable types from column names ───
+    spend_cols_all = [col for col in df.columns if '_spend' in col.lower()]
 
-    for spend_col in spend_cols:
-        # Extract channel name
+    # Separate channels into spend+impressions vs reach+frequency
+    si_channels = []       # spend+impressions channel names
+    si_impression_cols = []
+    si_spend_cols = []
+    rf_channels = []       # reach+frequency channel names
+    rf_reach_cols = []
+    rf_frequency_cols = []
+    rf_spend_cols = []
+
+    for spend_col in spend_cols_all:
         ch = spend_col.replace('_spend', '').replace('_Spend', '')
-        channels.append(ch)
 
-        # Find matching impression column
-        possible_imp_cols = [
-            f"{ch}_impressions",
-            f"{ch}_impression",  # Google's format
-            f"{ch.lower()}_impressions",
-            f"{ch.lower()}_impression",
-        ]
-        imp_col = None
-        for pic in possible_imp_cols:
-            if pic in df.columns:
-                imp_col = pic
-                break
+        # Check for reach+frequency columns
+        reach_col = next((c for c in df.columns if c.lower() == f"{ch.lower()}_reach"), None)
+        freq_col = next((c for c in df.columns if c.lower() == f"{ch.lower()}_frequency"), None)
 
-        if imp_col is None:
-            # Estimate impressions from spend
-            imp_col = f"{ch}_impression"
-            df[imp_col] = df[spend_col] * 100  # Assume $10 CPM
-            print(f"  Estimated impressions for {ch} from spend")
+        if reach_col and freq_col:
+            # R&F channel
+            rf_channels.append(ch)
+            rf_reach_cols.append(reach_col)
+            rf_frequency_cols.append(freq_col)
+            rf_spend_cols.append(spend_col)
+            print(f"  {ch}: reach+frequency channel")
+        elif reach_col and not freq_col:
+            print(f"  Warning: {ch} has _reach but no _frequency — treating as spend+impressions")
+            # Fall through to spend+impressions
+        elif freq_col and not reach_col:
+            print(f"  Warning: {ch} has _frequency but no _reach — treating as spend+impressions")
+            # Fall through to spend+impressions
 
-        impression_cols.append(imp_col)
+        if not (reach_col and freq_col):
+            # Spend+impressions channel
+            si_channels.append(ch)
+            si_spend_cols.append(spend_col)
+
+            # Find matching impression column
+            imp_col = None
+            for suffix in ["_impressions", "_impression"]:
+                for prefix in [ch, ch.lower()]:
+                    if f"{prefix}{suffix}" in df.columns:
+                        imp_col = f"{prefix}{suffix}"
+                        break
+                if imp_col:
+                    break
+
+            if imp_col is None:
+                imp_col = f"{ch}_impression"
+                df[imp_col] = df[spend_col] * 100  # Assume $10 CPM
+                print(f"  Estimated impressions for {ch} from spend")
+
+            si_impression_cols.append(imp_col)
+
+    # All paid media channels (spend+impressions + R&F) — used for priors, ROI, etc.
+    channels = si_channels + rf_channels
+
+    # Detect organic media columns (suffix: _organic)
+    organic_cols = [col for col in df.columns if col.lower().endswith('_organic')]
+    organic_channels = [col.rsplit('_organic', 1)[0] for col in organic_cols]
+    if organic_channels:
+        print(f"Organic media: {organic_channels}")
+
+    # Detect non-media treatment columns (suffix: _treatment)
+    treatment_cols = [col for col in df.columns if col.lower().endswith('_treatment')]
+    treatment_names = [col.rsplit('_treatment', 1)[0] for col in treatment_cols]
+    if treatment_names:
+        print(f"Non-media treatments: {treatment_names}")
+
+    # Detect control columns (suffix: _control, or common names like is_holiday)
+    control_cols = [col for col in df.columns if '_control' in col.lower()]
+    # Treatment columns take precedence over control columns
+    control_cols = [c for c in control_cols if c not in treatment_cols]
 
     if 'population' not in df.columns:
         pop_map = {'US': 330_000_000, 'UK': 67_000_000, 'AU': 26_000_000}
         df['population'] = df['geo'].map(lambda x: pop_map.get(x, 10_000_000))
 
-    print(f"Channels: {channels}")
+    print(f"Paid media channels: {channels} ({len(si_channels)} spend+imp, {len(rf_channels)} R&F)")
 
-    # Build Meridian input
+    # ─── Build Meridian InputData ───
     from meridian.data import data_frame_input_data_builder
 
-    # Determine KPI type based on data
     has_revenue = 'revenue_per_conversion' in df.columns or 'revenue' in df.columns
     kpi_type = 'revenue' if has_revenue else 'non_revenue'
 
@@ -135,19 +177,44 @@ def fit_mmm_full(
     builder = builder.with_kpi(df)
     builder = builder.with_population(df)
 
-    # Add revenue_per_kpi if available
     if 'revenue_per_conversion' in df.columns:
         builder = builder.with_revenue_per_kpi(df, revenue_per_kpi_col='revenue_per_conversion')
 
-    builder = builder.with_media(
-        df,
-        media_channels=channels,
-        media_cols=impression_cols,
-        media_spend_cols=spend_cols,
-    )
+    # Add spend+impressions media channels
+    if si_channels:
+        builder = builder.with_media(
+            df,
+            media_channels=si_channels,
+            media_cols=si_impression_cols,
+            media_spend_cols=si_spend_cols,
+        )
 
-    # Add controls if present
-    control_cols = [col for col in df.columns if '_control' in col.lower()]
+    # Add reach+frequency media channels
+    if rf_channels:
+        builder = builder.with_media_rf(
+            df,
+            media_channels=rf_channels,
+            reach_cols=rf_reach_cols,
+            frequency_cols=rf_frequency_cols,
+            spend_cols=rf_spend_cols,
+        )
+        print(f"Added R&F channels: {rf_channels}")
+
+    # Add organic media channels
+    if organic_cols:
+        builder = builder.with_organic_media(
+            df,
+            organic_channels=organic_channels,
+            organic_cols=organic_cols,
+        )
+        print(f"Added organic channels: {organic_channels}")
+
+    # Add non-media treatment variables
+    if treatment_cols:
+        builder = builder.with_non_media_treatments(df, treatment_cols=treatment_cols)
+        print(f"Added treatments: {treatment_names}")
+
+    # Add controls
     if control_cols:
         builder = builder.with_controls(df, control_cols=control_cols)
         print(f"Added controls: {control_cols}")
@@ -256,6 +323,9 @@ def fit_mmm_full(
         "adstock_decay": {},
         "marginal_roi": {},
         "model_fit": {},
+        "optimal_frequency": {},
+        "organic_contributions": {},
+        "treatment_effects": {},
         "optimization": {},
         "diagnostics": {},
         "model_review": {},
@@ -356,6 +426,51 @@ def fit_mmm_full(
             results["marginal_roi"][ch] = float(mroi_mean[i])
     except Exception as e:
         print(f"Warning: Marginal ROI extraction failed: {e}")
+
+    # 5b. Optimal frequency for R&F channels
+    if rf_channels:
+        print("Extracting optimal frequency for R&F channels...")
+        try:
+            opt_freq = mmm_analyzer.optimal_freq()
+            if opt_freq is not None:
+                opt_freq_np = opt_freq.numpy()
+                opt_freq_mean = opt_freq_np.mean(axis=(0, 1))
+                for i, ch in enumerate(rf_channels):
+                    results["optimal_frequency"][ch] = float(opt_freq_mean[i])
+        except Exception as e:
+            print(f"Warning: Optimal frequency extraction failed: {e}")
+
+    # 5c. Organic media contributions
+    if organic_channels:
+        print("Extracting organic media contributions...")
+        try:
+            organic_inc = mmm_analyzer.incremental_outcome(use_posterior=True)
+            organic_np = organic_inc.numpy().mean(axis=(0, 1))
+            # Organic channels come after paid media channels in the model output
+            n_paid = len(channels)
+            for i, ch in enumerate(organic_channels):
+                idx = n_paid + i
+                if idx < len(organic_np) if organic_np.ndim == 1 else idx < organic_np.shape[-1]:
+                    results["organic_contributions"][ch] = {
+                        "absolute": float(organic_np[idx] if organic_np.ndim == 1 else organic_np[..., idx].mean()),
+                    }
+        except Exception as e:
+            print(f"Warning: Organic contribution extraction failed: {e}")
+
+    # 5d. Non-media treatment effects
+    if treatment_cols:
+        print("Extracting treatment effects...")
+        try:
+            # Treatment effects are part of the model's non-media contribution
+            treatment_inc = mmm_analyzer.incremental_outcome(use_posterior=True)
+            treatment_np = treatment_inc.numpy().mean(axis=(0, 1))
+            for i, tname in enumerate(treatment_names):
+                results["treatment_effects"][tname] = {
+                    "name": tname,
+                    "column": treatment_cols[i],
+                }
+        except Exception as e:
+            print(f"Warning: Treatment effects extraction failed: {e}")
 
     # 6. Model fit (R-squared, MAPE) - critical for model quality tracking
     print("Extracting model fit metrics...")

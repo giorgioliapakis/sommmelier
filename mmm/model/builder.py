@@ -60,46 +60,88 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
     if config.revenue_column and config.revenue_column in df.columns:
         builder = builder.with_revenue_per_kpi(df, revenue_per_kpi_column=config.revenue_column)
 
-    # Build media channel lists
-    media_channel_names = []
-    media_impression_cols = []
-    media_spend_cols = []
+    # Separate media channels into spend+impressions vs reach+frequency
+    si_channel_names = []
+    si_impression_cols = []
+    si_spend_cols = []
+    rf_channel_names = []
+    rf_reach_cols = []
+    rf_frequency_cols = []
+    rf_spend_cols = []
 
     for channel in config.media_channels:
         if isinstance(channel, dict):
             name = channel["name"]
             spend_col = channel["spend_column"]
             impressions_col = channel.get("impressions_column")
+            reach_col = channel.get("reach_column")
+            frequency_col = channel.get("frequency_column")
         else:
             name = channel.name
             spend_col = channel.spend_column
             impressions_col = channel.impressions_column
+            reach_col = channel.reach_column
+            frequency_col = channel.frequency_column
 
-        media_channel_names.append(name)
-        media_spend_cols.append(spend_col)
-
-        if impressions_col and impressions_col in df.columns:
-            media_impression_cols.append(impressions_col)
+        # Determine channel type: R&F if both reach and frequency are present
+        if reach_col and frequency_col and reach_col in df.columns and frequency_col in df.columns:
+            rf_channel_names.append(name)
+            rf_reach_cols.append(reach_col)
+            rf_frequency_cols.append(frequency_col)
+            rf_spend_cols.append(spend_col)
         else:
-            # Estimate impressions from spend if not available (assume $10 CPM)
-            est_col = f"{name}_impressions_est"
-            df[est_col] = df[spend_col] * 100  # $10 CPM = 100 impressions per $1
-            media_impression_cols.append(est_col)
+            si_channel_names.append(name)
+            si_spend_cols.append(spend_col)
 
-    # Add media (Meridian 1.4+ requires media_channels parameter)
-    builder = builder.with_media(
-        df,
-        media_channels=media_channel_names,
-        media_cols=media_impression_cols,
-        media_spend_cols=media_spend_cols,
-    )
+            if impressions_col and impressions_col in df.columns:
+                si_impression_cols.append(impressions_col)
+            else:
+                est_col = f"{name}_impressions_est"
+                df[est_col] = df[spend_col] * 100  # $10 CPM
+                si_impression_cols.append(est_col)
+
+    # Add spend+impressions media channels
+    if si_channel_names:
+        builder = builder.with_media(
+            df,
+            media_channels=si_channel_names,
+            media_cols=si_impression_cols,
+            media_spend_cols=si_spend_cols,
+        )
+
+    # Add reach+frequency media channels
+    if rf_channel_names:
+        builder = builder.with_media_rf(
+            df,
+            media_channels=rf_channel_names,
+            reach_cols=rf_reach_cols,
+            frequency_cols=rf_frequency_cols,
+            spend_cols=rf_spend_cols,
+        )
+
+    # Add organic media channels
+    if hasattr(config, 'organic_channels') and config.organic_channels:
+        organic_names = [ch.name if hasattr(ch, 'name') else ch["name"] for ch in config.organic_channels]
+        organic_cols = [ch.column if hasattr(ch, 'column') else ch["column"] for ch in config.organic_channels]
+        valid_organic = [(n, c) for n, c in zip(organic_names, organic_cols) if c in df.columns]
+        if valid_organic:
+            builder = builder.with_organic_media(
+                df,
+                organic_channels=[n for n, _ in valid_organic],
+                organic_cols=[c for _, c in valid_organic],
+            )
+
+    # Add non-media treatment variables
+    if hasattr(config, 'treatment_columns') and config.treatment_columns:
+        treatment_cols = [c for c in config.treatment_columns if c in df.columns]
+        if treatment_cols:
+            builder = builder.with_non_media_treatments(df, treatment_cols=treatment_cols)
 
     # Add control variables (only if they vary by geo)
     if config.control_columns:
         valid_controls = []
         for col in config.control_columns:
             if col in df.columns:
-                # Check if control varies by geo (required by Meridian)
                 geo_variation = df.groupby("time")[col].nunique()
                 if (geo_variation > 1).any():
                     valid_controls.append(col)
