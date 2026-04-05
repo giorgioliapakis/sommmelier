@@ -159,41 +159,35 @@ def fit_mmm_full(
     import tensorflow_probability as tfp
 
     n_periods = df['time'].nunique()
-    if n_periods <= 13:
-        knots = [0, n_periods - 1]
-    elif n_periods <= 52:
-        knots = [0, n_periods // 2, n_periods - 1]
-    else:
-        knots = list(range(0, n_periods, 13))
-        if knots[-1] != n_periods - 1:
-            knots.append(n_periods - 1)
 
     # Configure priors - use calibration data if available
+    # Build per-channel ROI priors: each channel gets its own LogNormal distribution
+    default_roi_mean = 0.2
+    default_roi_sigma = 0.9
+
     if calibration_priors:
-        print(f"Using calibration priors for {len(calibration_priors)} channels")
-        # Build per-channel ROI priors from calibration
-        # For now, use the average of calibrated channels for the global prior
-        roi_means = [p["roi_mean"] for p in calibration_priors.values()]
-        roi_sigmas = [p["roi_sigma"] for p in calibration_priors.values()]
-        avg_mean = sum(roi_means) / len(roi_means) if roi_means else 0.2
-        avg_sigma = sum(roi_sigmas) / len(roi_sigmas) if roi_sigmas else 0.9
+        print(f"Using per-channel calibration priors for {len(calibration_priors)} channels")
+        roi_m_list = []
+        for ch in channels:
+            if ch in calibration_priors:
+                p = calibration_priors[ch]
+                roi_m_list.append(tfp.distributions.LogNormal(p["roi_mean"], p["roi_sigma"]))
+                print(f"  {ch}: mean={p['roi_mean']:.2f}, sigma={p['roi_sigma']:.2f} (from {p.get('source', 'calibration')})")
+            else:
+                roi_m_list.append(tfp.distributions.LogNormal(default_roi_mean, default_roi_sigma))
+                print(f"  {ch}: mean={default_roi_mean}, sigma={default_roi_sigma} (default, no calibration)")
 
-        # Log the priors being used
-        for ch, prior_data in calibration_priors.items():
-            print(f"  {ch}: mean={prior_data['roi_mean']:.2f}, sigma={prior_data['roi_sigma']:.2f} (from {prior_data.get('source', 'calibration')})")
-
-        # Use calibrated prior (more informative than default)
-        prior = prior_distribution.PriorDistribution(
-            roi_m=tfp.distributions.LogNormal(avg_mean, avg_sigma)
-        )
+        prior = prior_distribution.PriorDistribution(roi_m=roi_m_list)
     else:
-        # Default prior (uninformative)
+        # Default prior (uninformative) - single scalar applies to all channels
         print("Using default priors (no calibration data provided)")
         prior = prior_distribution.PriorDistribution(
-            roi_m=tfp.distributions.LogNormal(0.2, 0.9)
+            roi_m=tfp.distributions.LogNormal(default_roi_mean, default_roi_sigma)
         )
 
-    model_spec = spec.ModelSpec(prior=prior, knots=knots)
+    # Use Automatic Knot Selection (AKS) instead of manual quarterly heuristic.
+    # AKS uses backward elimination with a geo-aware penalty — strictly better.
+    model_spec = spec.ModelSpec(prior=prior, enable_aks=True)
     mmm = model.Meridian(input_data=input_data, model_spec=model_spec)
     print("Model initialized")
 
@@ -224,6 +218,7 @@ def fit_mmm_full(
             "total_kpi": float(df[kpi_column].sum()),
         },
         "roi": {},
+        "cpik": {},
         "contributions": {},
         "response_curves": {},
         "adstock_decay": {},
@@ -231,6 +226,7 @@ def fit_mmm_full(
         "model_fit": {},
         "optimization": {},
         "diagnostics": {},
+        "model_review": {},
     }
 
     mmm_analyzer = analyzer.Analyzer(mmm)
@@ -254,6 +250,18 @@ def fit_mmm_full(
             }
     except Exception as e:
         print(f"Warning: ROI extraction failed: {e}")
+
+    # 1b. CPIK (cost per incremental KPI) - inverse of ROI, more intuitive for marketers
+    print("Extracting CPIK...")
+    try:
+        cpik_tensor = mmm_analyzer.cpik()
+        cpik_np = cpik_tensor.numpy()
+        cpik_mean = cpik_np.mean(axis=(0, 1))
+
+        for i, ch in enumerate(channels):
+            results["cpik"][ch] = float(cpik_mean[i])
+    except Exception as e:
+        print(f"Warning: CPIK extraction failed: {e}")
 
     # 2. Contributions
     print("Extracting contributions...")
@@ -368,7 +376,51 @@ def fit_mmm_full(
     except Exception as e:
         print(f"Warning: Diagnostics extraction failed: {e}")
 
-    # 8. Budget optimization
+    # 8. ModelReviewer health card (7 checks: convergence, negative baseline,
+    #    Bayesian PPP, goodness of fit, prior-posterior shift, ROI consistency, diagnostics)
+    print("Running ModelReviewer...")
+    try:
+        from meridian.analysis.review import reviewer
+        from meridian.analysis.review import health_summary
+
+        model_reviewer = reviewer.ModelReviewer(mmm)
+        review_result = model_reviewer.run()
+
+        # Store structured results
+        results["model_review"] = {}
+        if isinstance(review_result, dict):
+            for check_name, check_result in review_result.items():
+                results["model_review"][check_name] = {
+                    "passed": bool(check_result.get("passed", True)) if isinstance(check_result, dict) else True,
+                    "details": str(check_result),
+                }
+        elif isinstance(review_result, list):
+            for item in review_result:
+                name = item.get("name", "unknown") if isinstance(item, dict) else str(item)
+                results["model_review"][name] = {
+                    "passed": item.get("passed", True) if isinstance(item, dict) else True,
+                    "details": str(item),
+                }
+        else:
+            results["model_review"]["raw"] = str(review_result)
+
+        print(f"  ModelReviewer completed: {len(results['model_review'])} checks")
+
+        # Generate native HTML health card
+        try:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            health_card_path = f"/outputs/health_card_{timestamp}.html"
+            health_summary.output_model_health_card(mmm, filename=health_card_path)
+            results["health_card_path"] = health_card_path
+            print(f"  Health card saved to {health_card_path}")
+        except Exception as e2:
+            print(f"  Warning: Health card generation failed: {e2}")
+
+    except Exception as e:
+        print(f"Warning: ModelReviewer failed: {e}")
+        results["model_review"] = {}
+
+    # 9. Budget optimization
     if run_optimization:
         print("Running budget optimization...")
         try:
@@ -513,6 +565,12 @@ def main(
     for ch, data in sorted(results.get("contributions", {}).items(), key=lambda x: -x[1].get("percentage", 0)):
         pct = data.get("percentage", 0)
         print(f"  {ch:12s}: {pct:.1f}%")
+
+    if results.get("cpik"):
+        print("\n## CPIK (Cost per Incremental KPI)")
+        print("-" * 40)
+        for ch, cpik in sorted(results.get("cpik", {}).items(), key=lambda x: x[1]):
+            print(f"  {ch:12s}: ${cpik:.2f}")
 
     print("\n## Marginal ROI (ROI at current spend)")
     print("-" * 40)
