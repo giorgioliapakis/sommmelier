@@ -38,6 +38,7 @@ def fit_mmm_full(
     n_keep: int = 500,
     run_optimization: bool = True,
     calibration_priors: dict | None = None,  # Channel-specific priors from calibration
+    holdout_weeks: int = 0,  # Number of trailing weeks to hold out (0 = no holdout)
 ) -> dict:
     """
     Fit MMM model and extract comprehensive results for visualization.
@@ -185,9 +186,40 @@ def fit_mmm_full(
             roi_m=tfp.distributions.LogNormal(default_roi_mean, default_roi_sigma)
         )
 
+    # Infer adstock type per channel: upper-funnel channels get binomial,
+    # direct response channels get geometric (the default).
+    UPPER_FUNNEL_KEYWORDS = {"youtube", "tv", "video", "brand_awareness", "awareness"}
+    adstock_decay_spec = {}
+    for ch in channels:
+        ch_lower = ch.lower()
+        if any(kw in ch_lower for kw in UPPER_FUNNEL_KEYWORDS):
+            adstock_decay_spec[ch] = "binomial"
+        else:
+            adstock_decay_spec[ch] = "geometric"
+    print(f"Adstock types: {adstock_decay_spec}")
+
+    # Build holdout mask if requested (out-of-time validation)
+    holdout_id = None
+    if holdout_weeks and holdout_weeks > 0:
+        n_geos = int(df['geo'].nunique())
+        if holdout_weeks > n_periods // 2:
+            print(f"Warning: holdout_weeks ({holdout_weeks}) > half the data ({n_periods // 2}). Skipping holdout.")
+        else:
+            holdout_id = np.zeros((n_geos, n_periods), dtype=bool)
+            holdout_id[:, -holdout_weeks:] = True
+            print(f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)")
+
     # Use Automatic Knot Selection (AKS) instead of manual quarterly heuristic.
     # AKS uses backward elimination with a geo-aware penalty — strictly better.
-    model_spec = spec.ModelSpec(prior=prior, enable_aks=True)
+    model_spec_kwargs = dict(
+        prior=prior,
+        enable_aks=True,
+        adstock_decay_spec=adstock_decay_spec,
+    )
+    if holdout_id is not None:
+        model_spec_kwargs["holdout_id"] = holdout_id
+
+    model_spec = spec.ModelSpec(**model_spec_kwargs)
     mmm = model.Meridian(input_data=input_data, model_spec=model_spec)
     print("Model initialized")
 
@@ -365,6 +397,28 @@ def fit_mmm_full(
         print(f"Warning: Model fit extraction failed: {e}")
         traceback.print_exc()
 
+    # 6b. Holdout validation (if holdout was requested)
+    if holdout_id is not None:
+        print("Extracting holdout validation metrics...")
+        try:
+            # predictive_accuracy with holdout gives in-sample and out-of-sample metrics
+            holdout_accuracy = mmm_analyzer.predictive_accuracy()
+            if holdout_accuracy is not None:
+                results["holdout_validation"] = {
+                    "holdout_weeks": holdout_weeks,
+                }
+                # Extract in-sample and out-of-sample R-squared if available
+                if 'metric' in holdout_accuracy.dims or 'metric' in holdout_accuracy.coords:
+                    for metric_name in holdout_accuracy.coords.get('metric', holdout_accuracy.dims.get('metric', [])).values:
+                        metric_str = str(metric_name).lower().replace('_', '')
+                        if 'rsquared' in metric_str:
+                            val = holdout_accuracy.sel(metric=metric_name)['value'].values
+                            val_float = float(val.mean()) if val.size > 1 else float(val)
+                            results["holdout_validation"]["r_squared"] = val_float
+                print(f"  Holdout validation: {results.get('holdout_validation', {})}")
+        except Exception as e:
+            print(f"Warning: Holdout validation extraction failed: {e}")
+
     # 7. MCMC diagnostics (R-hat)
     print("Extracting MCMC diagnostics...")
     try:
@@ -481,6 +535,7 @@ def main(
     n_keep: int = 500,
     report: bool = False,
     calibration: str = "",  # Path to calibration.json
+    holdout_weeks: int = 0,  # Hold out last N weeks for validation (~$0.30 extra GPU)
 ):
     """
     Run full MMM analysis from command line.
@@ -488,6 +543,7 @@ def main(
     Example:
         modal run modal_mmm_full.py --data data/examples/sample_data.csv --report
         modal run modal_mmm_full.py --data data/raw/mydata.csv --calibration data/calibration.json
+        modal run modal_mmm_full.py --data data/raw/mydata.csv --holdout-weeks 8
     """
     import json
     from pathlib import Path
@@ -545,6 +601,7 @@ def main(
         n_chains=n_chains,
         n_keep=n_keep,
         calibration_priors=calibration_priors,
+        holdout_weeks=holdout_weeks,
     )
 
     # Print summary

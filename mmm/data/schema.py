@@ -15,6 +15,26 @@ class MediaChannel(BaseModel):
     impressions_column: str | None = Field(None, description="Column name for impressions")
     reach_column: str | None = Field(None, description="Column name for reach data")
     frequency_column: str | None = Field(None, description="Column name for frequency data")
+    adstock_type: Literal["geometric", "binomial"] | None = Field(
+        None, description="Adstock decay type. None = auto-detect from channel name."
+    )
+
+
+class OrganicMediaChannel(BaseModel):
+    """Configuration for an organic media channel (no spend, gets adstock+Hill)."""
+
+    name: str = Field(..., description="Channel identifier (e.g., 'newsletter', 'blog')")
+    column: str = Field(..., description="Column name for organic media metric")
+
+
+class TreatmentVariable(BaseModel):
+    """Configuration for a non-media treatment variable (pricing, promotions)."""
+
+    name: str = Field(..., description="Treatment identifier (e.g., 'pricing', 'promotion_discount')")
+    column: str = Field(..., description="Column name for treatment data")
+    counterfactual_baseline: float | None = Field(
+        None, description="Counterfactual baseline value (None = use column min)"
+    )
 
 
 class DataConfig(BaseModel):
