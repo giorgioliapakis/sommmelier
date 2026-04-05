@@ -15,6 +15,7 @@ mmm_image = (
         "google-meridian==1.4.0",
         "pandas>=2.0.0",
         "pyarrow>=14.0.0",
+        "matplotlib>=3.8.0",
     )
     .pip_install(
         "jax[cuda12]",
@@ -329,6 +330,7 @@ def fit_mmm_full(
         "optimization": {},
         "diagnostics": {},
         "model_review": {},
+        "charts": {},
     }
 
     mmm_analyzer = analyzer.Analyzer(mmm)
@@ -588,6 +590,52 @@ def fit_mmm_full(
     except Exception as e:
         print(f"Warning: ModelReviewer failed: {e}")
         results["model_review"] = {}
+
+    # 8b. Native Meridian visualizations (generate PNGs on GPU)
+    print("Generating native Meridian charts...")
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+
+        from meridian.analysis import visualizer
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        chart_dir = f"/outputs/charts_{timestamp}"
+        import os
+        os.makedirs(chart_dir, exist_ok=True)
+
+        chart_configs = [
+            ("roi_chart.png", lambda: visualizer.MediaSummary(mmm_analyzer).plot_roi()),
+            ("contribution_chart.png", lambda: visualizer.MediaSummary(mmm_analyzer).plot_contribution()),
+            ("response_curves.png", lambda: visualizer.MediaEffects(mmm_analyzer).plot_response_curves()),
+            ("adstock_decay.png", lambda: visualizer.MediaEffects(mmm_analyzer).plot_adstock_decay()),
+            ("prior_posterior.png", lambda: visualizer.ModelDiagnostics(mmm_analyzer).plot_prior_posterior()),
+            ("expected_vs_actual.png", lambda: visualizer.ModelFit(mmm_analyzer).plot_expected_vs_actual()),
+            ("rhat_boxplot.png", lambda: visualizer.ModelDiagnostics(mmm_analyzer).plot_rhat()),
+        ]
+
+        results["charts"] = {}
+        for chart_name, plot_fn in chart_configs:
+            try:
+                import matplotlib.pyplot as plt
+                fig = plot_fn()
+                chart_path = f"{chart_dir}/{chart_name}"
+                if fig is not None:
+                    fig.savefig(chart_path, dpi=150, bbox_inches='tight')
+                    plt.close(fig)
+                else:
+                    plt.savefig(chart_path, dpi=150, bbox_inches='tight')
+                    plt.close('all')
+                results["charts"][chart_name.replace('.png', '')] = chart_path
+                print(f"  Saved {chart_name}")
+            except Exception as e_chart:
+                print(f"  Warning: {chart_name} generation failed: {e_chart}")
+
+        print(f"  Generated {len(results['charts'])} charts in {chart_dir}")
+
+    except Exception as e:
+        print(f"Warning: Native chart generation failed: {e}")
+        results["charts"] = {}
 
     # 9. Budget optimization
     if run_optimization:

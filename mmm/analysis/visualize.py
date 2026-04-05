@@ -334,9 +334,28 @@ def generate_insights(results: dict) -> list[dict]:
     return insights
 
 
+def _embed_png_chart(chart_path: str | None) -> str | None:
+    """Read a PNG file and return a base64-encoded <img> tag, or None."""
+    if not chart_path:
+        return None
+    try:
+        import base64
+        chart_file = Path(chart_path)
+        if chart_file.exists():
+            data = chart_file.read_bytes()
+            b64 = base64.b64encode(data).decode('ascii')
+            return f'<img src="data:image/png;base64,{b64}" style="max-width:100%;height:auto;" />'
+    except Exception:
+        pass
+    return None
+
+
 def generate_html_report(results: dict, output_path: Path | str) -> str:
     """
     Generate a comprehensive HTML report for laypeople.
+
+    Uses native Meridian PNG charts if available (from GPU run),
+    falls back to inline SVG charts generated from the JSON data.
 
     Args:
         results: Dictionary from fit_mmm_full() or fit_mmm()
@@ -350,11 +369,12 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
 
     metadata = results.get("metadata", {})
     insights = generate_insights(results)
+    charts = results.get("charts", {})
 
-    # Generate charts
-    roi_chart = generate_roi_chart_svg(results)
-    contrib_chart = generate_contribution_chart_svg(results)
-    mroi_chart = generate_marginal_roi_chart_svg(results)
+    # Use native PNG charts if available, fall back to SVG generation
+    roi_chart = _embed_png_chart(charts.get("roi_chart")) or generate_roi_chart_svg(results)
+    contrib_chart = _embed_png_chart(charts.get("contribution_chart")) or generate_contribution_chart_svg(results)
+    mroi_chart = _embed_png_chart(charts.get("response_curves")) or generate_marginal_roi_chart_svg(results)
 
     # Insight cards HTML
     insight_cards = ""
