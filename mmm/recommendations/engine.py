@@ -11,6 +11,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .improvement_advisor import (
+    ImprovementQuestion,
+    generate_improvement_questions,
+    format_questions_for_user,
+    format_questions_as_checklist,
+)
+
 
 @dataclass
 class Recommendation:
@@ -29,6 +36,7 @@ class AnalysisReport:
     timestamp: str
     summary: str
     recommendations: list[Recommendation] = field(default_factory=list)
+    improvement_questions: list[ImprovementQuestion] = field(default_factory=list)
     budget_reallocation: dict = field(default_factory=dict)
     model_health: dict = field(default_factory=dict)
     week_over_week: dict = field(default_factory=dict)
@@ -383,17 +391,26 @@ def generate_analysis(results_path: Path | str, outputs_dir: Path | str = "outpu
     # Compare to previous
     week_over_week = compare_to_previous(results, previous)
 
+    # Generate improvement questions (the self-improving part)
+    improvement_questions = generate_improvement_questions(results)
+
     # Generate summary
     high_priority = [r for r in all_recommendations if r.priority == "high"]
+    high_priority_questions = [q for q in improvement_questions if q.priority == "high"]
+
     if high_priority:
         summary = f"Found {len(high_priority)} high-priority issues requiring attention."
     else:
         summary = "No critical issues. Model is healthy and channels are performing as expected."
 
+    if high_priority_questions:
+        summary += f" {len(high_priority_questions)} high-impact improvements available."
+
     return AnalysisReport(
         timestamp=datetime.now().isoformat(),
         summary=summary,
         recommendations=all_recommendations,
+        improvement_questions=improvement_questions,
         budget_reallocation=budget_reallocation,
         model_health=model_health,
         week_over_week=week_over_week,
@@ -453,6 +470,25 @@ def format_report_for_claude(report: AnalysisReport) -> str:
             change = data["change_pct"]
             direction = "+" if change > 0 else ""
             lines.append(f"  {ch:12s} ROI: {data['previous']:.2f}x → {data['current']:.2f}x ({direction}{change:.1f}%)")
+
+    # Improvement questions (the self-improving part)
+    if report.improvement_questions:
+        lines.append("\n" + "-" * 40)
+        lines.append("HOW TO IMPROVE THIS MODEL")
+        lines.append("-" * 40)
+        lines.append("\nProvide any of this data to improve accuracy:\n")
+
+        for i, q in enumerate(report.improvement_questions[:5], 1):
+            priority_marker = {"high": "[HIGH IMPACT]", "medium": "[MEDIUM]", "low": "[NICE TO HAVE]"}.get(q.priority, "")
+            lines.append(f"{i}. {priority_marker} {q.question}")
+            lines.append(f"   Why: {q.why_it_helps[:150]}...")
+            if q.impact_estimate:
+                lines.append(f"   Impact: {q.impact_estimate}")
+            lines.append("")
+
+        remaining = len(report.improvement_questions) - 5
+        if remaining > 0:
+            lines.append(f"({remaining} more suggestions available)")
 
     lines.append("\n" + "=" * 60)
 

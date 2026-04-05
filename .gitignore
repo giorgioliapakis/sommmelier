@@ -67,3 +67,14 @@ Thumbs.db
 
 # Internal docs (not for public repo)
 internal-docs/
+.conductor/
+
+# Real client calibration data
+data/calibration.json
+
+# Client-specific scripts
+scripts/merge_client_data.py
+
+# Planning docs (internal brainstorming, not part of the tool)
+docs/brainstorms/
+docs/plans/

@@ -1,0 +1,36 @@
+{
+  "experiments": [
+    {
+      "channel": "meta",
+      "experiment_type": "geo_lift",
+      "lift_estimate": 0.15,
+      "lift_ci_lower": 0.1,
+      "lift_ci_upper": 0.2,
+      "test_period_weeks": 4,
+      "test_spend": 50000,
+      "test_conversions": null,
+      "notes": "Q4 2025 geo-lift test"
+    }
+  ],
+  "platform_conversions": [
+    {
+      "channel": "google",
+      "platform_conversions": 3000,
+      "period_weeks": 4,
+      "spend": 15000,
+      "attribution_window": "7d_click",
+      "notes": null
+    }
+  ],
+  "prior_beliefs": [
+    {
+      "channel": "tiktok",
+      "expected_roi_low": 0.5,
+      "expected_roi_high": 1.5,
+      "confidence": "low",
+      "source": "Industry benchmark"
+    }
+  ],
+  "control_variables": {},
+  "notes": "Example calibration data"
+}

@@ -37,6 +37,7 @@ def fit_mmm_full(
     n_chains: int = 4,
     n_keep: int = 500,
     run_optimization: bool = True,
+    calibration_priors: dict | None = None,  # Channel-specific priors from calibration
 ) -> dict:
     """
     Fit MMM model and extract comprehensive results for visualization.
@@ -167,9 +168,30 @@ def fit_mmm_full(
         if knots[-1] != n_periods - 1:
             knots.append(n_periods - 1)
 
-    prior = prior_distribution.PriorDistribution(
-        roi_m=tfp.distributions.LogNormal(0.2, 0.9)
-    )
+    # Configure priors - use calibration data if available
+    if calibration_priors:
+        print(f"Using calibration priors for {len(calibration_priors)} channels")
+        # Build per-channel ROI priors from calibration
+        # For now, use the average of calibrated channels for the global prior
+        roi_means = [p["roi_mean"] for p in calibration_priors.values()]
+        roi_sigmas = [p["roi_sigma"] for p in calibration_priors.values()]
+        avg_mean = sum(roi_means) / len(roi_means) if roi_means else 0.2
+        avg_sigma = sum(roi_sigmas) / len(roi_sigmas) if roi_sigmas else 0.9
+
+        # Log the priors being used
+        for ch, prior_data in calibration_priors.items():
+            print(f"  {ch}: mean={prior_data['roi_mean']:.2f}, sigma={prior_data['roi_sigma']:.2f} (from {prior_data.get('source', 'calibration')})")
+
+        # Use calibrated prior (more informative than default)
+        prior = prior_distribution.PriorDistribution(
+            roi_m=tfp.distributions.LogNormal(avg_mean, avg_sigma)
+        )
+    else:
+        # Default prior (uninformative)
+        print("Using default priors (no calibration data provided)")
+        prior = prior_distribution.PriorDistribution(
+            roi_m=tfp.distributions.LogNormal(0.2, 0.9)
+        )
 
     model_spec = spec.ModelSpec(prior=prior, knots=knots)
     mmm = model.Meridian(input_data=input_data, model_spec=model_spec)
@@ -406,12 +428,14 @@ def main(
     n_chains: int = 4,
     n_keep: int = 500,
     report: bool = False,
+    calibration: str = "",  # Path to calibration.json
 ):
     """
     Run full MMM analysis from command line.
 
     Example:
         modal run modal_mmm_full.py --data data/examples/sample_data.csv --report
+        modal run modal_mmm_full.py --data data/raw/mydata.csv --calibration data/calibration.json
     """
     import json
     from pathlib import Path
@@ -423,6 +447,42 @@ def main(
     print(f"Reading data from {data_path}...")
     data_csv = data_path.read_text()
 
+    # Load calibration data if provided
+    calibration_priors = None
+    if calibration:
+        calibration_path = Path(calibration)
+        if calibration_path.exists():
+            print(f"Loading calibration from {calibration_path}...")
+            try:
+                # Import locally to avoid requiring mmm package on Modal worker
+                import sys
+                sys.path.insert(0, str(Path(__file__).parent))
+                from mmm.calibration import load_calibration, calculate_channel_priors
+
+                cal_data = load_calibration(calibration_path)
+                calibration_priors = calculate_channel_priors(cal_data)
+                print(f"Loaded calibration with {len(calibration_priors)} channel priors")
+            except Exception as e:
+                print(f"Warning: Could not load calibration: {e}")
+                print("Proceeding with default priors")
+        else:
+            print(f"Warning: Calibration file not found: {calibration}")
+    else:
+        # Check for default calibration file location
+        default_cal = Path("data/calibration.json")
+        if default_cal.exists():
+            print(f"Found default calibration file: {default_cal}")
+            try:
+                import sys
+                sys.path.insert(0, str(Path(__file__).parent))
+                from mmm.calibration import load_calibration, calculate_channel_priors
+
+                cal_data = load_calibration(default_cal)
+                calibration_priors = calculate_channel_priors(cal_data)
+                print(f"Loaded calibration with {len(calibration_priors)} channel priors")
+            except Exception as e:
+                print(f"Warning: Could not load calibration: {e}")
+
     print("Submitting full analysis to Modal GPU...")
     print("(This may take 30-45 minutes)")
     print()
@@ -432,6 +492,7 @@ def main(
         kpi_column=kpi_column,
         n_chains=n_chains,
         n_keep=n_keep,
+        calibration_priors=calibration_priors,
     )
 
     # Print summary

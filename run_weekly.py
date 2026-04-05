@@ -119,9 +119,23 @@ def main():
         results["steps"]["validation"] = {"error": str(e)}
         sys.exit(1)
 
-    # Step 2: Run MMM on Modal
+    # Step 2: Check for calibration data
+    calibration_file = Path("data/calibration.json")
+    calibration_args = []
+    if calibration_file.exists():
+        print(f"\n✓ Found calibration data: {calibration_file}")
+        print("  Model will use informative priors from experiments/platform data")
+        calibration_args = ["--calibration", str(calibration_file)]
+        results["calibration_file"] = str(calibration_file)
+    else:
+        print(f"\n⚠ No calibration data found at {calibration_file}")
+        print("  Model will use default priors (wider uncertainty)")
+        print("  To improve accuracy, create data/calibration.json with experiment results")
+
+    # Step 3: Run MMM on Modal
+    modal_cmd = ["modal", "run", "--detach", "modal_mmm_full.py", "--data", str(data_file)] + calibration_args
     success, output = run_command(
-        ["modal", "run", "modal_mmm_full.py", "--data", str(data_file)],
+        modal_cmd,
         "Running MMM model on Modal GPU"
     )
     results["steps"]["mmm_fit"] = {"success": success}
@@ -140,7 +154,7 @@ def main():
     results["results_file"] = str(results_file)
     print(f"\nResults saved to: {results_file}")
 
-    # Step 3: Generate HTML report (via CLI)
+    # Step 4: Generate HTML report (via CLI)
     success, output = run_command(
         ["python", "-m", "mmm.cli.main", "report", str(results_file)],
         "Generating HTML report"
@@ -152,7 +166,7 @@ def main():
         results["report_file"] = str(report_file)
         print(f"Report saved to: {report_file}")
 
-    # Step 4: Run analysis and recommendations (via CLI)
+    # Step 5: Run analysis and recommendations (via CLI)
     success, output = run_command(
         ["python", "-m", "mmm.cli.main", "analyze", str(results_file)],
         "Analyzing results and generating recommendations"
@@ -165,7 +179,7 @@ def main():
     if analysis_file.exists():
         results["analysis_file"] = str(analysis_file)
 
-    # Step 5: Update model quality tracking
+    # Step 6: Update model quality tracking
     print(f"\n{'='*60}")
     print("STEP: Updating model quality tracking")
     print(f"{'='*60}")
