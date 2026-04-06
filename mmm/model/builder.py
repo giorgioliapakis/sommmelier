@@ -109,14 +109,14 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
             media_spend_cols=si_spend_cols,
         )
 
-    # Add reach+frequency media channels
+    # Add reach+frequency media channels (Meridian 1.4.x: with_reach)
     if rf_channel_names:
-        builder = builder.with_media_rf(
+        builder = builder.with_reach(
             df,
-            media_channels=rf_channel_names,
             reach_cols=rf_reach_cols,
             frequency_cols=rf_frequency_cols,
-            spend_cols=rf_spend_cols,
+            rf_spend_cols=rf_spend_cols,
+            rf_channels=rf_channel_names,
         )
 
     # Add organic media channels
@@ -127,15 +127,15 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
         if valid_organic:
             builder = builder.with_organic_media(
                 df,
-                organic_channels=[n for n, _ in valid_organic],
-                organic_cols=[c for _, c in valid_organic],
+                organic_media_cols=[c for _, c in valid_organic],
+                organic_media_channels=[n for n, _ in valid_organic],
             )
 
     # Add non-media treatment variables
     if hasattr(config, 'treatment_columns') and config.treatment_columns:
         treatment_cols = [c for c in config.treatment_columns if c in df.columns]
         if treatment_cols:
-            builder = builder.with_non_media_treatments(df, treatment_cols=treatment_cols)
+            builder = builder.with_non_media_treatments(df, non_media_treatment_cols=treatment_cols)
 
     # Add control variables (only if they vary by geo)
     if config.control_columns:

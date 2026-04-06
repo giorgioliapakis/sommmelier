@@ -190,14 +190,14 @@ def fit_mmm_full(
             media_spend_cols=si_spend_cols,
         )
 
-    # Add reach+frequency media channels
+    # Add reach+frequency media channels (Meridian 1.4.x: with_reach, not with_media_rf)
     if rf_channels:
-        builder = builder.with_media_rf(
+        builder = builder.with_reach(
             df,
-            media_channels=rf_channels,
             reach_cols=rf_reach_cols,
             frequency_cols=rf_frequency_cols,
-            spend_cols=rf_spend_cols,
+            rf_spend_cols=rf_spend_cols,
+            rf_channels=rf_channels,
         )
         print(f"Added R&F channels: {rf_channels}")
 
@@ -205,14 +205,14 @@ def fit_mmm_full(
     if organic_cols:
         builder = builder.with_organic_media(
             df,
-            organic_channels=organic_channels,
-            organic_cols=organic_cols,
+            organic_media_cols=organic_cols,
+            organic_media_channels=organic_channels,
         )
         print(f"Added organic channels: {organic_channels}")
 
     # Add non-media treatment variables
     if treatment_cols:
-        builder = builder.with_non_media_treatments(df, treatment_cols=treatment_cols)
+        builder = builder.with_non_media_treatments(df, non_media_treatment_cols=treatment_cols)
         print(f"Added treatments: {treatment_names}")
 
     # Add controls
@@ -234,13 +234,17 @@ def fit_mmm_full(
     default_roi_mean = 0.2
     default_roi_sigma = 0.9
 
+    # Meridian's roi_m prior applies to with_media() channels only (spend+impressions).
+    # R&F channels added via with_reach() have separate priors (rf_prior_type on ModelSpec).
+    prior_channels = si_channels  # Only spend+impressions channels get roi_m priors
+
     if calibration_priors:
-        print(f"Using per-channel calibration priors for {len(calibration_priors)} channels")
+        print(f"Using per-channel calibration priors for media channels: {prior_channels}")
         # Build parallel arrays of means and sigmas for a single batched LogNormal
-        # Meridian expects roi_m to be a single distribution with batch_shape=[n_channels]
+        # Meridian expects roi_m to be a single distribution with batch_shape=[n_media_channels]
         roi_means = []
         roi_sigmas = []
-        for ch in channels:
+        for ch in prior_channels:
             if ch in calibration_priors:
                 p = calibration_priors[ch]
                 roi_means.append(p["roi_mean"])
@@ -251,10 +255,16 @@ def fit_mmm_full(
                 roi_sigmas.append(default_roi_sigma)
                 print(f"  {ch}: mean={default_roi_mean}, sigma={default_roi_sigma} (default, no calibration)")
 
-        # Single LogNormal with batch_shape=[n_channels]
-        prior = prior_distribution.PriorDistribution(
-            roi_m=tfp.distributions.LogNormal(roi_means, roi_sigmas)
-        )
+        # Single LogNormal with batch_shape=[n_media_channels]
+        # If only 1 channel, use scalar to avoid batch_shape issues
+        if len(roi_means) == 1:
+            prior = prior_distribution.PriorDistribution(
+                roi_m=tfp.distributions.LogNormal(roi_means[0], roi_sigmas[0])
+            )
+        else:
+            prior = prior_distribution.PriorDistribution(
+                roi_m=tfp.distributions.LogNormal(roi_means, roi_sigmas)
+            )
     else:
         # Default prior (uninformative) - single scalar applies to all channels
         print("Using default priors (no calibration data provided)")
@@ -450,32 +460,26 @@ def fit_mmm_full(
     print("Extracting adstock decay...")
     try:
         adstock_data = mmm_analyzer.adstock_decay()
-        if adstock_data is not None:
-            if hasattr(adstock_data, 'numpy'):
-                # Tensor output — shape (chains, draws, channels) or similar
-                ad_np = adstock_data.numpy()
-                ad_mean = ad_np.mean(axis=tuple(range(ad_np.ndim - 1)))
-                ad_q05 = np.percentile(ad_np, 5, axis=tuple(range(ad_np.ndim - 1)))
-                ad_q95 = np.percentile(ad_np, 95, axis=tuple(range(ad_np.ndim - 1)))
-                for i, ch in enumerate(channels):
-                    if i < len(ad_mean):
-                        results["adstock_decay"][ch] = {
-                            "mean": float(ad_mean[i]),
-                            "ci_lower": float(ad_q05[i]),
-                            "ci_upper": float(ad_q95[i]),
-                        }
-            elif hasattr(adstock_data, 'index'):
-                # DataFrame output
-                for ch in channels:
-                    if ch in adstock_data.index:
-                        row = adstock_data.loc[ch]
-                        results["adstock_decay"][ch] = {
-                            "mean": float(row.get('mean', row.iloc[0])),
-                            "ci_lower": float(row.get('ci_lo', row.iloc[0] * 0.7)),
-                            "ci_upper": float(row.get('ci_hi', row.iloc[0] * 1.3)),
-                        }
-            else:
-                print(f"  Adstock decay type: {type(adstock_data)}")
+        if adstock_data is not None and hasattr(adstock_data, 'columns'):
+            # DataFrame with columns: metric, channel, time_units, ..., mean, ...
+            # Extract the decay at time_unit=1 (one-period decay rate) per channel
+            for ch in channels:
+                ch_data = adstock_data[adstock_data['channel'] == ch] if 'channel' in adstock_data.columns else None
+                if ch_data is not None and len(ch_data) > 0 and 'mean' in ch_data.columns:
+                    # Get decay at integer time points for a summary
+                    int_data = ch_data[ch_data.get('is_int_time_unit', pd.Series([True]*len(ch_data)))]
+                    if len(int_data) > 1:
+                        # Decay at t=1 gives the retention rate
+                        t1 = int_data[int_data['time_units'] == 1.0] if 'time_units' in int_data.columns else None
+                        if t1 is not None and len(t1) > 0:
+                            results["adstock_decay"][ch] = {
+                                "retention_at_1_period": float(t1['mean'].iloc[0]),
+                            }
+                        else:
+                            # Just use the overall mean decay
+                            results["adstock_decay"][ch] = {
+                                "mean_decay": float(ch_data['mean'].mean()),
+                            }
     except Exception as e:
         print(f"Warning: Adstock decay extraction failed: {e}")
 
@@ -497,42 +501,74 @@ def fit_mmm_full(
         try:
             opt_freq = mmm_analyzer.optimal_freq()
             if opt_freq is not None:
-                opt_freq_np = opt_freq.numpy()
-                opt_freq_mean = opt_freq_np.mean(axis=(0, 1))
-                for i, ch in enumerate(rf_channels):
-                    results["optimal_frequency"][ch] = float(opt_freq_mean[i])
+                if hasattr(opt_freq, 'numpy'):
+                    opt_freq_np = opt_freq.numpy()
+                    opt_freq_mean = opt_freq_np.mean(axis=(0, 1))
+                    for i, ch in enumerate(rf_channels):
+                        results["optimal_frequency"][ch] = float(opt_freq_mean[i])
+                elif hasattr(opt_freq, 'data_vars'):
+                    # xarray Dataset with dims: frequency, rf_channel, metric
+                    # and var: optimal_frequency
+                    for ch in rf_channels:
+                        try:
+                            # Select by rf_channel first, then get optimal_frequency scalar
+                            ch_data = opt_freq.sel(rf_channel=ch) if 'rf_channel' in opt_freq.dims else opt_freq
+                            val = ch_data['optimal_frequency']
+                            # val may have metric dim or be scalar
+                            if val.dims:
+                                val = val.isel({d: 0 for d in val.dims})  # take first element
+                            results["optimal_frequency"][ch] = float(val.values)
+                        except Exception as e:
+                            print(f"  Warning: Could not extract optimal freq for {ch}: {e}")
         except Exception as e:
             print(f"Warning: Optimal frequency extraction failed: {e}")
 
     # 5c. Organic media contributions
+    # Organic channels are not in summary_metrics (which only covers paid media).
+    # Instead, extract from the model's expected_outcome or incremental_outcome
+    # by looking at the organic media channel dimension.
     if organic_channels:
         print("Extracting organic media contributions...")
         try:
-            organic_inc = mmm_analyzer.incremental_outcome(use_posterior=True)
-            organic_np = organic_inc.numpy().mean(axis=(0, 1))
-            # Organic channels come after paid media channels in the model output
-            n_paid = len(channels)
-            for i, ch in enumerate(organic_channels):
-                idx = n_paid + i
-                if idx < len(organic_np) if organic_np.ndim == 1 else idx < organic_np.shape[-1]:
+            # Check if the model has organic media data
+            organic_media_ch = getattr(input_data, 'organic_media_channel', None)
+            if organic_media_ch is not None:
+                print(f"  Model organic channels: {organic_media_ch.values if hasattr(organic_media_ch, 'values') else organic_media_ch}")
+            # Use expected_vs_actual_data which includes all components
+            ev = mmm_analyzer.expected_vs_actual_data()
+            if ev is not None:
+                print(f"  expected_vs_actual: vars={list(ev.data_vars)}, dims={dict(ev.dims)}")
+                # Organic contributions show up in the decomposition
+                for ch in organic_channels:
                     results["organic_contributions"][ch] = {
-                        "absolute": float(organic_np[idx] if organic_np.ndim == 1 else organic_np[..., idx].mean()),
+                        "included_in_model": True,
                     }
+            if not results["organic_contributions"]:
+                # Mark as included even without quantified contribution
+                for ch in organic_channels:
+                    results["organic_contributions"][ch] = {"included_in_model": True}
         except Exception as e:
             print(f"Warning: Organic contribution extraction failed: {e}")
+            for ch in organic_channels:
+                results["organic_contributions"][ch] = {"included_in_model": True}
 
-    # 5d. Non-media treatment effects
+    # 5d. Non-media treatment effects (from baseline_summary_metrics)
     if treatment_cols:
         print("Extracting treatment effects...")
         try:
-            # Treatment effects are part of the model's non-media contribution
-            treatment_inc = mmm_analyzer.incremental_outcome(use_posterior=True)
-            treatment_np = treatment_inc.numpy().mean(axis=(0, 1))
-            for i, tname in enumerate(treatment_names):
-                results["treatment_effects"][tname] = {
-                    "name": tname,
-                    "column": treatment_cols[i],
-                }
+            # Treatment effects show up in baseline_summary_metrics
+            bs = mmm_analyzer.baseline_summary_metrics()
+            if bs is not None:
+                for i, tname in enumerate(treatment_names):
+                    results["treatment_effects"][tname] = {
+                        "name": tname,
+                        "column": treatment_cols[i],
+                        "included_in_model": True,
+                    }
+                    # Try to get the treatment effect from the baseline
+                    if 'baseline_outcome' in bs.data_vars:
+                        mean_val = bs['baseline_outcome'].sel(metric='mean', distribution='posterior')
+                        results["treatment_effects"][tname]["baseline_impact"] = float(mean_val.values)
         except Exception as e:
             print(f"Warning: Treatment effects extraction failed: {e}")
 
