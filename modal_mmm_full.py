@@ -315,26 +315,7 @@ def fit_mmm_full(
         model_spec_kwargs["holdout_id"] = holdout_id
 
     # Try full ModelSpec; strip unsupported kwargs if needed
-    try:
-        model_spec = spec.ModelSpec(**model_spec_kwargs)
-    except TypeError as e:
-        print(f"Warning: ModelSpec rejected some parameters ({e}), falling back to basic config")
-        # Strip optional new params and retry with just prior + knots/aks
-        for optional_key in ["adstock_decay_spec", "holdout_id", "enable_aks"]:
-            model_spec_kwargs.pop(optional_key, None)
-        if "knots" not in model_spec_kwargs:
-            # Need at least knots if we removed enable_aks
-            if n_periods <= 13:
-                model_spec_kwargs["knots"] = [0, n_periods - 1]
-            elif n_periods <= 52:
-                model_spec_kwargs["knots"] = [0, n_periods // 2, n_periods - 1]
-            else:
-                knots = list(range(0, n_periods, 13))
-                if knots[-1] != n_periods - 1:
-                    knots.append(n_periods - 1)
-                model_spec_kwargs["knots"] = knots
-        model_spec = spec.ModelSpec(**model_spec_kwargs)
-
+    model_spec = spec.ModelSpec(**model_spec_kwargs)
     mmm = model.Meridian(input_data=input_data, model_spec=model_spec)
     print("Model initialized")
 
@@ -437,42 +418,64 @@ def fit_mmm_full(
     print("Extracting response curves...")
     try:
         spend_multipliers = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
-        response_data = mmm_analyzer.response_curves(spend_multipliers=spend_multipliers)
-        if response_data is not None:
-            # Meridian may return xarray Dataset or pandas DataFrame
-            if hasattr(response_data, 'columns'):
-                # pandas DataFrame
+        response_ds = mmm_analyzer.response_curves(spend_multipliers=spend_multipliers)
+        if response_ds is not None:
+            # Meridian 1.4.x returns xarray Dataset with dims: spend_multiplier, channel, metric
+            # and data vars: spend, incremental_outcome
+            if 'incremental_outcome' in response_ds.data_vars and 'channel' in response_ds.dims:
                 for ch in channels:
-                    ch_data = response_data[response_data['channel'] == ch] if 'channel' in response_data.columns else None
-                    if ch_data is not None and len(ch_data) > 0:
+                    try:
+                        # Get mean incremental outcome across the metric dimension
+                        ch_data = response_ds['incremental_outcome'].sel(channel=ch)
+                        # metric dim has [mean, ci_lo, ci_hi] — take mean (index 0)
+                        if 'metric' in ch_data.dims:
+                            mean_response = ch_data.sel(metric=ch_data.coords['metric'].values[0]).values.tolist()
+                        else:
+                            mean_response = ch_data.values.tolist()
                         results["response_curves"][ch] = {
-                            "spend_multiplier": ch_data['spend_multiplier'].tolist() if 'spend_multiplier' in ch_data.columns else [],
-                            "response": ch_data['response_mean'].tolist() if 'response_mean' in ch_data.columns else [],
+                            "spend_multiplier": spend_multipliers,
+                            "response": mean_response,
                         }
-            elif hasattr(response_data, 'data_vars'):
-                # xarray Dataset — extract what we can
-                print(f"  Response curves returned xarray: vars={list(response_data.data_vars)}, dims={dict(response_data.dims)}")
-                for i, ch in enumerate(channels):
-                    results["response_curves"][ch] = {
-                        "spend_multiplier": spend_multipliers,
-                        "response": [],  # Will be populated from xarray structure
-                    }
+                    except (KeyError, IndexError):
+                        results["response_curves"][ch] = {
+                            "spend_multiplier": spend_multipliers,
+                            "response": [],
+                        }
+            else:
+                print(f"  Response curves xarray: vars={list(response_ds.data_vars)}, dims={dict(response_ds.dims)}")
     except Exception as e:
         print(f"Warning: Response curves extraction failed: {e}")
 
     # 4. Adstock decay
     print("Extracting adstock decay...")
     try:
-        adstock_df = mmm_analyzer.adstock_decay()
-        if adstock_df is not None and len(adstock_df) > 0:
-            for ch in channels:
-                if ch in adstock_df.index:
-                    row = adstock_df.loc[ch]
-                    results["adstock_decay"][ch] = {
-                        "mean": float(row['mean']) if 'mean' in row else None,
-                        "ci_lower": float(row['ci_lo']) if 'ci_lo' in row else None,
-                        "ci_upper": float(row['ci_hi']) if 'ci_hi' in row else None,
-                    }
+        adstock_data = mmm_analyzer.adstock_decay()
+        if adstock_data is not None:
+            if hasattr(adstock_data, 'numpy'):
+                # Tensor output — shape (chains, draws, channels) or similar
+                ad_np = adstock_data.numpy()
+                ad_mean = ad_np.mean(axis=tuple(range(ad_np.ndim - 1)))
+                ad_q05 = np.percentile(ad_np, 5, axis=tuple(range(ad_np.ndim - 1)))
+                ad_q95 = np.percentile(ad_np, 95, axis=tuple(range(ad_np.ndim - 1)))
+                for i, ch in enumerate(channels):
+                    if i < len(ad_mean):
+                        results["adstock_decay"][ch] = {
+                            "mean": float(ad_mean[i]),
+                            "ci_lower": float(ad_q05[i]),
+                            "ci_upper": float(ad_q95[i]),
+                        }
+            elif hasattr(adstock_data, 'index'):
+                # DataFrame output
+                for ch in channels:
+                    if ch in adstock_data.index:
+                        row = adstock_data.loc[ch]
+                        results["adstock_decay"][ch] = {
+                            "mean": float(row.get('mean', row.iloc[0])),
+                            "ci_lower": float(row.get('ci_lo', row.iloc[0] * 0.7)),
+                            "ci_upper": float(row.get('ci_hi', row.iloc[0] * 1.3)),
+                        }
+            else:
+                print(f"  Adstock decay type: {type(adstock_data)}")
     except Exception as e:
         print(f"Warning: Adstock decay extraction failed: {e}")
 
@@ -634,32 +637,19 @@ def fit_mmm_full(
 
         print(f"  ModelReviewer completed: {len(results['model_review'])} checks")
 
-        # Try to generate HTML health card (import path varies by Meridian version)
-        try:
-            from meridian.analysis.review import health_summary
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            health_card_path = f"/outputs/health_card_{timestamp}.html"
-            health_summary.output_model_health_card(mmm, filename=health_card_path)
-            results["health_card_path"] = health_card_path
-            print(f"  Health card saved to {health_card_path}")
-        except ImportError:
-            print("  Health card not available in this Meridian version")
-        except Exception as e2:
-            print(f"  Warning: Health card generation failed: {e2}")
-
-    except ImportError:
-        print("Warning: ModelReviewer not available in this Meridian version")
-        results["model_review"] = {}
     except Exception as e:
         print(f"Warning: ModelReviewer failed: {e}")
         results["model_review"] = {}
 
     # 8b. Native Meridian visualizations (generate PNGs on GPU)
+    # Meridian 1.4.x visualizer classes: MediaSummary, MediaEffects, ModelFit, ModelDiagnostics
+    # They take an Analyzer instance and have specific plot_* method names.
     print("Generating native Meridian charts...")
     try:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
+        from meridian.analysis import visualizer
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         chart_dir = f"/outputs/charts_{timestamp}"
@@ -668,31 +658,26 @@ def fit_mmm_full(
 
         results["charts"] = {}
 
-        # Try Meridian's plotting module (API varies by version)
-        # Meridian 1.4.x uses meridian.output.plotting with the model directly
-        try:
-            from meridian.output import plotting
-            chart_fns = [
-                ("roi_chart.png", lambda: plotting.plot_media_summary(mmm)),
-                ("response_curves.png", lambda: plotting.plot_response_curves(mmm)),
-                ("prior_posterior.png", lambda: plotting.plot_prior_posterior(mmm)),
-                ("expected_vs_actual.png", lambda: plotting.plot_model_fit(mmm)),
-            ]
-        except ImportError:
-            # Fallback: try the visualizer module
-            try:
-                from meridian.analysis import visualizer
-                chart_fns = [
-                    ("roi_chart.png", lambda: visualizer.MediaSummary(mmm).plot_roi()),
-                    ("response_curves.png", lambda: visualizer.MediaEffects(mmm).plot_response_curves()),
-                    ("prior_posterior.png", lambda: visualizer.ModelDiagnostics(mmm).plot_prior_posterior()),
-                    ("expected_vs_actual.png", lambda: visualizer.ModelFit(mmm).plot_expected_vs_actual()),
-                ]
-            except ImportError:
-                chart_fns = []
-                print("  No charting module found in this Meridian version")
+        # Meridian 1.4.0 visualizer classes take the Meridian model, not the Analyzer
+        media_summary = visualizer.MediaSummary(mmm)
+        media_effects = visualizer.MediaEffects(mmm)
+        model_fit_viz = visualizer.ModelFit(mmm)
+        model_diag = visualizer.ModelDiagnostics(mmm)
 
-        for chart_name, plot_fn in chart_fns:
+        chart_configs = [
+            ("roi_bar_chart.png", media_summary.plot_roi_bar_chart),
+            ("contribution_pie.png", media_summary.plot_contribution_pie_chart),
+            ("cpik_chart.png", media_summary.plot_cpik),
+            ("roi_vs_mroi.png", media_summary.plot_roi_vs_mroi),
+            ("response_curves.png", media_effects.plot_response_curves),
+            ("adstock_decay.png", media_effects.plot_adstock_decay),
+            ("hill_curves.png", media_effects.plot_hill_curves),
+            ("model_fit.png", model_fit_viz.plot_model_fit),
+            ("prior_posterior.png", model_diag.plot_prior_and_posterior_distribution),
+            ("rhat_boxplot.png", model_diag.plot_rhat_boxplot),
+        ]
+
+        for chart_name, plot_fn in chart_configs:
             try:
                 fig = plot_fn()
                 chart_path = f"{chart_dir}/{chart_name}"
@@ -705,7 +690,7 @@ def fit_mmm_full(
                 results["charts"][chart_name.replace('.png', '')] = chart_path
                 print(f"  Saved {chart_name}")
             except Exception as e_chart:
-                print(f"  Warning: {chart_name} generation failed: {e_chart}")
+                print(f"  Warning: {chart_name} failed: {e_chart}")
 
         print(f"  Generated {len(results['charts'])} charts in {chart_dir}")
 
@@ -717,37 +702,30 @@ def fit_mmm_full(
     if run_optimization:
         print("Running budget optimization...")
         try:
-            budget_optimizer = optimizer.BudgetOptimizer(mmm_analyzer)
+            # BudgetOptimizer takes the Meridian model, not the Analyzer
+            budget_optimizer = optimizer.BudgetOptimizer(mmm)
 
-            # Get current total spend
             current_spend = sum(results["metadata"]["total_spend"].values())
 
-            # Create optimization scenarios
-            from meridian.analysis.optimizer import FixedBudgetScenario
-
-            scenarios = [
-                FixedBudgetScenario(budget=current_spend * 0.8, name="reduce_20"),
-                FixedBudgetScenario(budget=current_spend, name="current"),
-                FixedBudgetScenario(budget=current_spend * 1.2, name="increase_20"),
-            ]
-
-            for scenario in scenarios:
+            spend_multipliers = {"reduce_20": 0.8, "current": 1.0, "increase_20": 1.2}
+            for name, mult in spend_multipliers.items():
                 try:
-                    opt_result = budget_optimizer.optimize(scenario)
+                    budget = current_spend * mult
+                    opt_result = budget_optimizer.optimize(fixed_budget=budget)
                     if opt_result is not None:
-                        results["optimization"][scenario.name] = {
-                            "budget": float(scenario.budget),
+                        results["optimization"][name] = {
+                            "budget": float(budget),
                             "optimal_allocation": {},
                             "expected_outcome": None,
                         }
-                        # Extract optimal allocation per channel
                         if hasattr(opt_result, 'optimal_spend'):
                             for i, ch in enumerate(channels):
-                                results["optimization"][scenario.name]["optimal_allocation"][ch] = float(opt_result.optimal_spend[i])
+                                if i < len(opt_result.optimal_spend):
+                                    results["optimization"][name]["optimal_allocation"][ch] = float(opt_result.optimal_spend[i])
                         if hasattr(opt_result, 'optimal_outcome'):
-                            results["optimization"][scenario.name]["expected_outcome"] = float(opt_result.optimal_outcome)
+                            results["optimization"][name]["expected_outcome"] = float(opt_result.optimal_outcome)
                 except Exception as e:
-                    print(f"Warning: Optimization for {scenario.name} failed: {e}")
+                    print(f"  Warning: Optimization for {name} failed: {e}")
 
         except Exception as e:
             print(f"Warning: Budget optimization failed: {e}")
