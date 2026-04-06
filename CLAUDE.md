@@ -90,6 +90,11 @@ This produces:
 - **Marginal > Average**: Room to scale efficiently
 - **Marginal ≈ Average**: At optimal spend level
 
+### CPIK (Cost per Incremental KPI)
+The inverse of ROI expressed in dollars. More intuitive for marketers thinking in CPA terms.
+- **Lower is better**: $5 CPIK means each incremental conversion costs $5
+- Compare to the brand's target CPA to assess channel viability
+
 ### Model Quality
 - **R-squared > 0.6**: Good model fit
 - **MAPE < 20%**: Accurate predictions
@@ -172,6 +177,11 @@ If model quality is degrading, flag this prominently.
 # Run full pipeline
 python run_weekly.py data/raw/your_data.csv
 
+# Run model directly with custom params
+modal run modal_mmm_full.py --data data/raw/your_data.csv
+modal run modal_mmm_full.py --data data/raw/your_data.csv --max-lag 12 --n-keep 1000
+modal run modal_mmm_full.py --data data/raw/your_data.csv --holdout-weeks 8
+
 # Just analyze existing results
 python -m mmm.cli.main analyze
 
@@ -181,3 +191,18 @@ python -m mmm.cli.main quality --history
 # Validate a dataset before running
 python -m mmm.cli.main validate data/raw/your_data.csv
 ```
+
+## Model Parameters
+
+The defaults are sensible for most datasets. Only change these if you have a specific reason:
+
+| Parameter | Flag | Default | When to change |
+|-----------|------|---------|---------------|
+| Max lag | `--max-lag` | 8 | Carryover window feels wrong for your product category (try 4 for impulse, 12 for considered purchase) |
+| Holdout weeks | `--holdout-weeks` | 0 | Run once with holdout to check for overfitting |
+| Samples kept | `--n-keep` | 500 | Only if convergence warnings (R-hat > 1.1) |
+| Adaptation steps | `--n-adapt` | 2000 | Only if convergence failed |
+
+Most model quality issues are about data and priors, not these parameters. If R-squared is low or CIs are wide, the fix is usually better data or calibration, not more MCMC samples.
+
+Each run stores its config in `results.metadata.config` so runs can be compared.

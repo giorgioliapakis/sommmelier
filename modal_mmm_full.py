@@ -37,9 +37,14 @@ def fit_mmm_full(
     kpi_column: str = "conversions",
     n_chains: int = 4,
     n_keep: int = 500,
+    n_adapt: int = 2000,
+    n_burnin: int = 500,
+    max_lag: int = 8,
     run_optimization: bool = True,
     calibration_priors: dict | None = None,  # Channel-specific priors from calibration
     holdout_weeks: int = 0,  # Number of trailing weeks to hold out (0 = no holdout)
+    adstock_overrides: dict | None = None,  # {"channel": "geometric"|"binomial"}
+    force_aks: bool | None = None,  # None=auto, True=force AKS, False=force manual knots
 ) -> dict:
     """
     Fit MMM model and extract comprehensive results for visualization.
@@ -274,14 +279,18 @@ def fit_mmm_full(
 
     # Infer adstock type per channel: upper-funnel channels get binomial,
     # direct response channels get geometric (the default).
+    # User overrides take precedence over auto-detection.
     UPPER_FUNNEL_KEYWORDS = {"youtube", "tv", "video", "brand_awareness", "awareness"}
     adstock_decay_spec = {}
     for ch in channels:
-        ch_lower = ch.lower()
-        if any(kw in ch_lower for kw in UPPER_FUNNEL_KEYWORDS):
-            adstock_decay_spec[ch] = "binomial"
+        if adstock_overrides and ch in adstock_overrides:
+            adstock_decay_spec[ch] = adstock_overrides[ch]
         else:
-            adstock_decay_spec[ch] = "geometric"
+            ch_lower = ch.lower()
+            if any(kw in ch_lower for kw in UPPER_FUNNEL_KEYWORDS):
+                adstock_decay_spec[ch] = "binomial"
+            else:
+                adstock_decay_spec[ch] = "geometric"
     print(f"Adstock types: {adstock_decay_spec}")
 
     # Build holdout mask if requested (out-of-time validation)
@@ -295,21 +304,20 @@ def fit_mmm_full(
             holdout_id[:, -holdout_weeks:] = True
             print(f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)")
 
-    # Use AKS when the dataset is large enough, fall back to manual knots otherwise.
-    # AKS requires enough time periods for backward elimination to work.
-    USE_AKS_MIN_PERIODS = 26  # AKS needs meaningful time range
+    # Determine knot strategy: AKS vs manual
+    USE_AKS_MIN_PERIODS = 26
+    use_aks = force_aks if force_aks is not None else (n_periods >= USE_AKS_MIN_PERIODS)
 
     # Only include adstock_decay_spec if any channels are non-default (binomial)
     has_binomial = any(v == "binomial" for v in adstock_decay_spec.values())
-    model_spec_kwargs = dict(prior=prior)
+    model_spec_kwargs = dict(prior=prior, max_lag=max_lag)
     if has_binomial:
         model_spec_kwargs["adstock_decay_spec"] = adstock_decay_spec
 
-    if n_periods >= USE_AKS_MIN_PERIODS:
+    if use_aks:
         model_spec_kwargs["enable_aks"] = True
         print(f"Using Automatic Knot Selection (AKS) — {n_periods} periods")
     else:
-        # Manual knot placement for small datasets
         if n_periods <= 13:
             knots = [0, n_periods - 1]
         elif n_periods <= 52:
@@ -319,7 +327,7 @@ def fit_mmm_full(
             if knots[-1] != n_periods - 1:
                 knots.append(n_periods - 1)
         model_spec_kwargs["knots"] = knots
-        print(f"Using manual knots (dataset too small for AKS): {knots}")
+        print(f"Using manual knots: {knots}")
 
     if holdout_id is not None:
         model_spec_kwargs["holdout_id"] = holdout_id
@@ -333,11 +341,11 @@ def fit_mmm_full(
     print("Sampling from prior...")
     mmm.sample_prior(500)
 
-    print(f"Sampling posterior with {n_chains} chains, {n_keep} samples each...")
+    print(f"Sampling posterior with {n_chains} chains, {n_keep} samples each (adapt={n_adapt}, burnin={n_burnin})...")
     mmm.sample_posterior(
         n_chains=n_chains,
-        n_adapt=2000,
-        n_burnin=500,
+        n_adapt=n_adapt,
+        n_burnin=n_burnin,
         n_keep=n_keep,
         seed=0,
     )
@@ -354,6 +362,16 @@ def fit_mmm_full(
             "channels": channels,
             "total_spend": {ch: float(df[f"{ch}_spend"].sum()) for ch in channels},
             "total_kpi": float(df[kpi_column].sum()),
+            "config": {
+                "n_chains": n_chains,
+                "n_keep": n_keep,
+                "n_adapt": n_adapt,
+                "n_burnin": n_burnin,
+                "max_lag": max_lag,
+                "use_aks": use_aks,
+                "adstock_decay_spec": adstock_decay_spec,
+                "holdout_weeks": holdout_weeks,
+            },
         },
         "roi": {},
         "cpik": {},
@@ -786,6 +804,9 @@ def main(
     kpi_column: str = "conversions",
     n_chains: int = 4,
     n_keep: int = 500,
+    n_adapt: int = 2000,
+    n_burnin: int = 500,
+    max_lag: int = 8,
     report: bool = False,
     calibration: str = "",  # Path to calibration.json
     holdout_weeks: int = 0,  # Hold out last N weeks for validation (~$0.30 extra GPU)
@@ -797,6 +818,7 @@ def main(
         modal run modal_mmm_full.py --data data/examples/sample_data.csv --report
         modal run modal_mmm_full.py --data data/raw/mydata.csv --calibration data/calibration.json
         modal run modal_mmm_full.py --data data/raw/mydata.csv --holdout-weeks 8
+        modal run modal_mmm_full.py --data data/raw/mydata.csv --max-lag 12 --n-keep 1000
     """
     import json
     from pathlib import Path
@@ -853,6 +875,9 @@ def main(
         kpi_column=kpi_column,
         n_chains=n_chains,
         n_keep=n_keep,
+        n_adapt=n_adapt,
+        n_burnin=n_burnin,
+        max_lag=max_lag,
         calibration_priors=calibration_priors,
         holdout_weeks=holdout_weeks,
     )

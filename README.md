@@ -2,18 +2,21 @@
 
 **An MMM data scientist in your terminal.**
 
-Sommmelier runs Bayesian Marketing Mix Models on GPU, interprets the results in your business context, and tells you what to change to make the model more accurate next time.
+> **Early stage.** Treat model outputs as directional, not as budget decisions.
 
-Built on [Google Meridian](https://github.com/google/meridian). Runs on GPU via [Modal](https://modal.com) (~$0.30/run). Designed to work with [Claude Code](https://claude.ai/download).
+Sommmelier is an agent-driven MMM that fits your model, diagnoses what's limiting it, and tells you what to change before the next run.
+
+Runs [Google Meridian](https://github.com/google/meridian) on GPU via [Modal](https://modal.com) (~$0.30/run). Uses [Claude Code](https://code.claude.com/docs/en/overview) as the analyst layer.
 
 ## What it does
 
 1. **Fits MMM models on cloud GPU** via Modal.com (~$0.30/run)
-2. **Generates visual reports** with charts for stakeholders
-3. **Tracks model quality** (R-squared, MAPE, convergence) over time
-4. **Coaches you through improvements** like a data scientist would
+2. **Diagnoses model quality** and re-runs with fixes if needed (convergence, overfitting, carryover windows)
+3. **Generates visual reports** with 10 native Meridian charts
+4. **Tracks model quality** over time across runs
+5. **Tells you what to improve** - data gaps, missing controls, calibration opportunities
 
-After each run, the system analyzes 11 diagnostics and tells you specifically what to change:
+After each run, the system analyzes diagnostics and tells you specifically what to change:
 
 - "Meta's CI is too wide. Run a 4-week geo holdout in 3 states to calibrate."
 - "Add a holiday control variable. The model is attributing promo lifts to ad spend."
@@ -29,7 +32,7 @@ Suggestions are tracked across runs. Act on one, re-run, and see whether it help
 
 - Python 3.11 or 3.12
 - A [Modal](https://modal.com) account (free tier available, this is where the model runs on GPU)
-- [Claude Code](https://claude.ai/download) (recommended, acts as your MMM analyst)
+- [Claude Code](https://code.claude.com/docs/en/overview) (recommended, acts as your MMM analyst)
 
 ### Install
 
@@ -47,7 +50,7 @@ modal setup
 
 ### Option A: Guided experience (Claude Code)
 
-If you have [Claude Code](https://claude.ai/download), open it in this project directory:
+If you have [Claude Code](https://code.claude.com/docs/en/overview), open it in this project directory:
 
 ```bash
 # 1. Start Claude Code in the project
@@ -65,7 +68,7 @@ claude
 
 `/init` asks about your brand, channels, KPIs, and goals. It saves everything to `context/` files that make future analysis specific to your situation, and adjusts how technical or hand-holdy it is based on your experience level.
 
-`/sommmelier` runs the model (or analyzes existing results), reads your brand context, and writes recommendations that reference your specific goals and constraints.
+`/sommmelier` runs the model, tests parameter variations if it thinks they'd help, reads your brand context, and writes recommendations that reference your specific goals and constraints.
 
 ### Option B: CLI only
 
@@ -110,6 +113,12 @@ A CSV with weekly marketing data. At minimum:
 The system tells you which of these matter most for your situation. You don't need all of them upfront. Start with what you have.
 
 **Impression data** (`{channel}_impression` columns). Without this, the model estimates impressions from spend at $10 CPM. Real impressions are better.
+
+**Reach & frequency data** (`{channel}_reach` and `{channel}_frequency` columns). For channels where you have reach and frequency data (e.g., YouTube, TV), the model uses frequency-based saturation instead of spend-based. Produces optimal frequency recommendations.
+
+**Organic media** (`{name}_organic` columns, e.g., `newsletter_organic`, `blog_organic`). Organic channels get adstock and saturation treatment like paid channels, but without ROI calculation (since there's no spend).
+
+**Non-media treatments** (`{name}_treatment` columns, e.g., `promotion_discount_treatment`, `pricing_treatment`). For things you can control that aren't media - pricing changes, promotions, distribution changes. Modeled separately from controls.
 
 **Control variables** (columns ending in `_control`, or named `is_holiday`, `product_launch`, etc.). These help the model separate marketing effects from other things that drive conversions:
 
@@ -163,28 +172,26 @@ See [`data/examples/sample_data.csv`](data/examples/sample_data.csv) for a compl
 
     /init                              /sommmelier
      │                                  │
-     ├─ Brand context                   ├─ Fit model on GPU
-     ├─ Data assessment      ┌─────>    ├─ Interpret results
-     ├─ Prior calibration    │          ├─ Compare to last run
-     └─ Ready to run ────────┘          ├─ Write recommendations
-                                        ├─ Suggest improvements ──┐
-                                        └─ Update learnings       │
-                                                                  │
-                                        ┌─────────────────────────┘
-                                        │
-                                        v
-                              "Add holiday controls"
-                              "Run geo holdout for Meta"
-                              "Split social → Meta + TikTok"
-                              "Prior-posterior divergence on Google"
-                                        │
-                                        │  you act on suggestions
-                                        │
-                                        └─────> /sommmelier (next run)
-                                                model gets more accurate
+     ├─ Brand context                   ├─ Baseline run on GPU
+     ├─ Data assessment      ┌─────>    ├─ Assess diagnostics
+     ├─ Prior calibration    │          ├─ Try parameter variations (auto)
+     └─ Ready to run ────────┘          ├─ Compare runs, pick best config
+                                        ├─ Write analysis + recommendations
+                                        ├─ Log what worked ───────────────┐
+                                        │                                 │
+                                        ├─ "Things I'll try next run"     │
+                                        │   (model params, config)        │
+                                        │                                 │
+                                        └─ "Things you need to do"        │
+                                            (data, experiments)           │
+                                                    │                     │
+                                                    │  you act on these   │
+                                                    │                     │
+                                                    └─────> /sommmelier ──┘
+                                                            (next run)
 ```
 
-Each run produces reports and recommendations. The useful part is the loop: change something, re-run, see if it helped.
+Each run, the agent handles what it can (parameter tuning, holdout checks) and tells you what it can't (collect data, run experiments). The loop compounds - learnings from each run inform the next.
 
 ## Understanding results
 
@@ -197,6 +204,15 @@ Channel ROI:
 - **> 1.5x**: Strong performer, consider scaling
 - **1.0 - 1.5x**: Profitable, maintain or test scaling
 - **< 1.0x**: Underperforming, needs investigation
+
+### CPIK (Cost per Incremental KPI)
+```
+CPIK (Cost per Incremental KPI):
+  meta   : $3.21
+  google : $6.30
+  tiktok : $13.84
+```
+The inverse of ROI in dollar terms. If your target CPA is $10, any channel with CPIK below $10 is profitable. More intuitive than ROI for budget discussions.
 
 ### Marginal vs average ROI
 ```
@@ -276,4 +292,4 @@ MIT
 
 - [Google Meridian](https://github.com/google/meridian) for Bayesian MMM
 - [Modal](https://modal.com) for serverless GPU compute
-- [Claude Code](https://claude.ai/download) for the AI analyst layer
+- [Claude Code](https://code.claude.com/docs/en/overview) for the AI analyst layer

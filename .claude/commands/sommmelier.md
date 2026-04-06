@@ -33,24 +33,63 @@ Check what data and results exist:
 - Look for the latest results in `outputs/full_results_*.json`
 - Check `outputs/model_quality_history.json` for historical context
 
-## Step 2: Run the Model (if requested)
+## Step 2: Baseline Run
 
-If the user provided a data file path, run the full pipeline:
+If the user provided a data file path, run the model:
 ```bash
-python run_weekly.py [data_file]
+modal run modal_mmm_full.py --data [data_file]
 ```
 
-This takes ~10-15 minutes on Modal GPU.
+This is the baseline run. Read the results JSON when it completes.
 
-## Step 3: Read the Results
+## Step 3: Diagnose and Decide
 
-Read the latest results JSON file. Key fields to examine:
-- `roi` or `channel_roi` -- ROI by channel with confidence intervals
+After the baseline run completes, review the results like a data scientist would. Your job is to figure out what's limiting this model and whether you can fix it, or whether it needs human action.
+
+**Look at the baseline and ask:**
+- Is R-squared suspiciously high (>0.99)? Probably overfit. Run holdout to check.
+- Is R-squared low (<0.5)? The model is underspecified. Likely needs more control variables or better priors - that's a recommendation for the human.
+- Are confidence intervals very wide on important channels? Usually means not enough data or weak priors - again, a human problem.
+- Does the adstock decay look wrong? (e.g., a brand/video channel showing instant decay when it should have a longer carryover). Try a different `max_lag`.
+- Are there convergence warnings (R-hat > 1.1)? Bump up `--n-keep` and `--n-adapt` and re-run.
+
+**Most model quality issues are about data and priors, not parameters.** Don't run extra model fits hoping to find a magic config. The defaults are sensible. Only re-run if you have a specific reason:
+
+| Reason to re-run | What to change |
+|-------------------|---------------|
+| Convergence warnings | `--n-keep 1000 --n-adapt 3000` (just needs more samples) |
+| Suspect overfitting | `--holdout-weeks 8` (check out-of-sample fit) |
+| Wrong carryover window | `--max-lag 4` or `--max-lag 12` (domain-dependent) |
+
+**Don't re-run for:** wide CIs (need more data/priors), low R-squared (need control variables), weird ROI estimates (need calibration). These are recommendations for the human.
+
+### Budget cap
+
+You may run **up to 2 additional model runs** beyond the baseline (3 total max). Most of the time, one run is enough. Tell the user if and why you're running another.
+
+### Comparing runs
+
+If you did run a variation, compare to baseline:
+- Did the specific thing you were testing improve?
+- Log what you tried and what happened in model-learnings.md.
+
+Pick the best run's results for the analysis.
+
+## Step 4: Read Final Results
+
+Read the best results JSON. Key fields to examine:
+- `roi` -- ROI by channel with confidence intervals
+- `cpik` -- Cost per incremental KPI
 - `marginal_roi` -- Current marginal returns
 - `contributions` -- Channel contribution to KPI
 - `model_fit` -- R-squared, MAPE, convergence
+- `metadata.config` -- What parameters produced these results
+- `model_review` -- Diagnostic check results
+- `optimal_frequency` -- For R&F channels
+- `organic_contributions` -- For organic media channels
+- `treatment_effects` -- For non-media treatments
 
-## Step 4: Compare to History
+## Step 5: Compare to History
 
 Read `outputs/model_quality_history.json` and compare:
 - Is R-squared improving or degrading?
@@ -58,33 +97,40 @@ Read `outputs/model_quality_history.json` and compare:
 - Any convergence issues?
 - Flag any channel with >20% ROI change from previous run
 
-## Step 5: Write Your Analysis
+## Step 6: Write Your Analysis
 
 Write the analysis to `outputs/analysis_[DATE].md`. Adapt based on context:
 
 **If context exists**, your analysis should:
 - Use the company name and reference their specific KPI targets
 - Frame recommendations around their stated goals ("To hit your target CPA of $25...")
-- Flag when a recommendation conflicts with a stated constraint (e.g., "Note: This suggests increasing Meta spend, but your context indicates Meta budget is fixed at $50k/month")
-- Reference prior model learnings ("Last run showed Google saturation -- this run confirms that trend")
+- Flag when a recommendation conflicts with a stated constraint
+- Reference prior model learnings
 
 **Always include these sections:**
 
 ```markdown
-# Weekly MMM Analysis - [DATE]
+# MMM Analysis - [DATE]
 
 ## Executive Summary
 [2-3 sentences: Main takeaway, referencing brand goals if context exists]
 
+## What We Tested
+[If you ran multiple variations, summarize what you tried and why]
+- Baseline: default config → R²=X, MAPE=Y%
+- Variation 1: [what you changed] → R²=X, MAPE=Y% → [kept/discarded, why]
+- ...
+[Selected config: ...]
+
 ## Key Findings
 
 ### Top Performers
-- [Channel]: [ROI]x ROI - [Why this matters for THIS brand]
+- [Channel]: [ROI]x ROI, CPIK $[X] - [Why this matters for THIS brand]
 
 ### Concerns
 - [Channel]: [Issue] - [Recommendation]
 
-## Week-over-Week Changes
+## Run-over-Run Changes
 [What changed from last run? Why? Flag changes >20%]
 
 ## Recommendations
@@ -94,74 +140,71 @@ Write the analysis to `outputs/analysis_[DATE].md`. Adapt based on context:
    - Expected impact: [What happens]
    - Constraints: [Any conflicts with stated constraints]
 
-## How to Improve This Model
+## What Would Improve This Model
 
-This is the most important section. Think like a data scientist advising a client. Be specific.
+Split into two categories:
 
-For each suggestion, explain: what to do, why it helps, and how much impact to expect.
+### Things we can test next run (model parameters)
+[Only if you have specific hypotheses you didn't get to test within the budget cap]
 
-Examples of what to recommend:
-- "Meta's 90% CI spans 0.3-1.8x -- that's too wide to act on. **Run a 4-week geo holdout** in 3 states to calibrate. This would narrow the CI significantly."
-- "The model has no holiday control variable, but your brand profile mentions strong Q4 seasonality. **Add an is_holiday column** -- the model is likely attributing holiday lifts to ad spend."
-- "You're running Meta and TikTok as one 'social' channel. **Split them** -- they have very different audiences and response curves."
-- "R-squared dropped from 0.78 to 0.65 since last run. **Check for a structural change** -- new product launch? pricing change? market shift?"
-- "Google's platform reports 2.1x ROAS but the model estimates 0.9x ROI. **This gap is normal** (platform over-attributes), but the divergence is larger than typical -- investigate if Google's attribution window changed."
-- "You only have 28 weeks of TikTok data. **Wait 6 more months** before trusting that channel's ROI estimate, or run an incrementality test to calibrate."
+### Things that need human action
+[Data collection, experiments, new columns — things Claude can't do]
 
-Check the improvement backlog from previous runs. If a suggestion was already made and not acted on, note it. If it was acted on, compare before/after.
+Be specific. Not "add more data" but "add a binary is_holiday column for weeks containing Black Friday, Christmas, and Easter — the model is likely attributing seasonal lifts to ad spend."
 
 ## Confidence and Caveats
 
 [Calibrate to experience level:]
-- **Beginner**: Plain language. "The model is less certain about TikTok because we only have 6 months of data. Take TikTok recommendations with a grain of salt."
-- **Intermediate**: Mix of plain and technical. "TikTok's wide confidence interval (0.3-1.8x) means the model needs more data to be sure about its effectiveness."
-- **Advanced**: Statistical context. "TikTok posterior CI width of 1.5 with R-hat 1.03 suggests adequate convergence but low posterior concentration. Consider informative priors from platform data or an incrementality test."
+- **Beginner**: Plain language.
+- **Intermediate**: Mix of plain and technical.
+- **Advanced**: Statistical context.
 
 [Always state explicitly what the model CAN and CANNOT tell them.]
 
 ## Model Health
-[R-squared: X, MAPE: Y%, Convergence: OK/Warning]
+[R-squared, MAPE, convergence status, config used]
 ```
 
-## Step 6: Update Context
+## Step 7: Update Context
 
 After writing the analysis, update context files:
 
 ### model-learnings.md
-Append a dated entry to `context/model-learnings.md` (create the file if it doesn't exist):
+Append a dated entry to `context/model-learnings.md` (create if needed):
 ```markdown
 ## [TODAY'S DATE]
+- **Config:** [key params that differ from defaults, e.g. max_lag=12, n_keep=1000]
 - **Model fit:** R-squared X, MAPE Y%
 - **Top performer:** [Channel] at [ROI]x
-- **Key changes:** [What shifted from last run]
-- **Notable:** [Any surprising findings or concerns]
+- **Variations tested:** [What you tried and what happened]
+- **Key insight:** [The most important thing learned this run]
+- **Open questions:** [What would help next time]
 ```
-Keep entries concise -- summaries, not full results. If the file is getting long (>50 entries), summarize older entries.
 
 ### improvement-backlog.md
-Write `context/improvement-backlog.md` with current improvement suggestions:
+Write `context/improvement-backlog.md` with current suggestions:
 ```markdown
 Last updated: [TODAY'S DATE]
 
 # Improvement Backlog
 
-## Active Suggestions
-- [ ] [Suggestion from improvement advisor output]
-- [ ] [Suggestion]
+## Model Parameter Ideas (for next auto-research)
+- [ ] [Things to try with different config next run]
+
+## Needs Human Action
+- [ ] [Data/experiment suggestions the agent can't do itself]
 
 ## Previously Addressed
-- [x] [Any items that were acted on, with before/after impact noted]
+- [x] [Items acted on, with before/after impact]
 ```
-
-If a previous backlog exists, preserve checked items and note which suggestions are new.
 
 ## Output
 
 After analysis, tell the user:
-1. Where to find the HTML report (for stakeholders)
+1. How many runs you did and why (or why just one was enough)
 2. Key recommendations (top 2-3)
-3. Any model health concerns
-4. Top improvement suggestion
+3. What would improve the model — split into "things I can try next time" vs "things you need to do"
+4. Any model health concerns
 
 ## Interpretation Guide
 
