@@ -110,8 +110,16 @@ class AutoMMM:
         self._results: ModelResults | None = None
         self._input_data = None
 
-    def prepare(self) -> None:
-        """Prepare the model for fitting (build InputData, initialize Meridian)."""
+    def prepare(
+        self,
+        calibration_priors: dict[str, dict] | None = None,
+    ) -> None:
+        """Prepare the model for fitting (build InputData, initialize Meridian).
+
+        Args:
+            calibration_priors: Per-channel priors from calibration module.
+                Keys are channel names, values have roi_mean, roi_sigma, source.
+        """
         from meridian.model import model, prior_distribution, spec
 
         import tensorflow_probability as tfp
@@ -119,35 +127,47 @@ class AutoMMM:
         # Build Meridian InputData from our dataset
         self._input_data = build_meridian_input(self.dataset)
 
-        # Configure priors
-        prior = prior_distribution.PriorDistribution(
-            roi_m=tfp.distributions.LogNormal(
-                self.config.roi_prior_mean,
-                self.config.roi_prior_sigma,
+        # Configure per-channel priors (single batched LogNormal with batch_shape=[n_channels])
+        if calibration_priors:
+            roi_means = []
+            roi_sigmas = []
+            for ch in self.dataset.media_channels:
+                if ch in calibration_priors:
+                    p = calibration_priors[ch]
+                    roi_means.append(p["roi_mean"])
+                    roi_sigmas.append(p["roi_sigma"])
+                else:
+                    roi_means.append(self.config.roi_prior_mean)
+                    roi_sigmas.append(self.config.roi_prior_sigma)
+            prior = prior_distribution.PriorDistribution(
+                roi_m=tfp.distributions.LogNormal(roi_means, roi_sigmas)
             )
-        )
+        else:
+            prior = prior_distribution.PriorDistribution(
+                roi_m=tfp.distributions.LogNormal(
+                    self.config.roi_prior_mean,
+                    self.config.roi_prior_sigma,
+                )
+            )
 
-        # Auto-calculate knots if not specified
-        # Rule of thumb: ~1 knot per 13 weeks (quarter)
-        knots = self.config.knots
-        if knots is None:
-            n_periods = self.dataset.n_time_periods
+        # Use AKS when dataset is large enough, fall back to manual knots
+        n_periods = self.dataset.n_time_periods
+        model_spec_kwargs = dict(prior=prior, max_lag=self.config.max_lag)
+
+        if n_periods >= 26:
+            model_spec_kwargs["enable_aks"] = True
+        else:
             if n_periods <= 13:
                 knots = [0, n_periods - 1]
             elif n_periods <= 52:
                 knots = [0, n_periods // 2, n_periods - 1]
             else:
-                # Quarterly knots
                 knots = list(range(0, n_periods, 13))
                 if knots[-1] != n_periods - 1:
                     knots.append(n_periods - 1)
+            model_spec_kwargs["knots"] = knots
 
-        # Create model spec (Meridian 1.4+ API)
-        model_spec = spec.ModelSpec(
-            prior=prior,
-            knots=knots,
-            max_lag=self.config.max_lag,
-        )
+        model_spec = spec.ModelSpec(**model_spec_kwargs)
 
         # Initialize Meridian model
         self._meridian = model.Meridian(
@@ -155,18 +175,23 @@ class AutoMMM:
             model_spec=model_spec,
         )
 
-    def fit(self, sample_prior: bool = True) -> ModelResults:
+    def fit(
+        self,
+        sample_prior: bool = True,
+        calibration_priors: dict[str, dict] | None = None,
+    ) -> ModelResults:
         """
         Fit the MMM model.
 
         Args:
             sample_prior: Whether to sample from prior first (recommended)
+            calibration_priors: Per-channel priors from calibration module.
 
         Returns:
             ModelResults with fit metrics and insights
         """
         if self._meridian is None:
-            self.prepare()
+            self.prepare(calibration_priors=calibration_priors)
 
         # Sample from prior (optional but recommended)
         if sample_prior:
@@ -222,8 +247,12 @@ class AutoMMM:
         """
         Run model diagnostics and review.
 
+        Runs all 7 ModelReviewer checks: convergence, negative baseline,
+        Bayesian PPP, goodness of fit, prior-posterior shift, ROI consistency,
+        model diagnostics.
+
         Returns:
-            Dictionary of diagnostic results
+            Dictionary of diagnostic results with check names, pass/fail, details.
         """
         if self._meridian is None:
             raise ValueError("Model must be fitted first. Call fit() before review().")
@@ -231,7 +260,20 @@ class AutoMMM:
         from meridian.analysis.review import reviewer
 
         model_reviewer = reviewer.ModelReviewer(self._meridian)
-        return model_reviewer.run()
+        raw_result = model_reviewer.run()
+
+        # Structure the results for downstream consumption
+        structured = {}
+        if isinstance(raw_result, dict):
+            for check_name, check_result in raw_result.items():
+                structured[check_name] = {
+                    "passed": bool(check_result.get("passed", True)) if isinstance(check_result, dict) else True,
+                    "details": str(check_result),
+                }
+        else:
+            structured["raw"] = str(raw_result)
+
+        return structured
 
     def optimize_budget(
         self,

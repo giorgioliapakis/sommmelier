@@ -143,7 +143,20 @@ def load_mmm_data(
         spend_cols = [col for col in df.columns if "_spend" in col.lower()]
         for spend_col in spend_cols:
             channel_name = spend_col.replace("_spend", "").replace("_Spend", "")
-            # Check for corresponding impressions column
+
+            # Check for reach+frequency columns
+            reach_col = None
+            frequency_col = None
+            for suffix in ["_reach"]:
+                potential = channel_name + suffix
+                if potential in df.columns:
+                    reach_col = potential
+            for suffix in ["_frequency"]:
+                potential = channel_name + suffix
+                if potential in df.columns:
+                    frequency_col = potential
+
+            # Check for impressions column
             impressions_col = None
             for suffix in ["_impressions", "_imps", "_Impressions"]:
                 potential_col = channel_name + suffix
@@ -156,8 +169,16 @@ def load_mmm_data(
                     "name": channel_name,
                     "spend_column": spend_col,
                     "impressions_column": impressions_col,
+                    "reach_column": reach_col,
+                    "frequency_column": frequency_col,
                 }
             )
+
+    # Auto-detect organic media columns (suffix: _organic)
+    if not config.control_columns:
+        # Also populate control columns if not already set
+        control_candidates = [col for col in df.columns if "_control" in col.lower()]
+        config.control_columns = control_candidates
 
     # Extract metadata
     date_range = (df[config.date_column].min().date(), df[config.date_column].max().date())
