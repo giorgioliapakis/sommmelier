@@ -8,6 +8,19 @@ and prior beliefs to improve model accuracy.
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
+
+CalibrationMetric = Literal["monetary_roi", "incremental_kpi_per_currency"]
+
+
+def infer_calibration_metric(columns: list[str], kpi_column: str) -> CalibrationMetric:
+    """Infer the prior metric from the modeled KPI and available revenue fields."""
+    normalized = {column.lower() for column in columns}
+    if kpi_column.lower() == "revenue" or normalized.intersection(
+        {"revenue", "revenue_per_kpi", "revenue_per_conversion"}
+    ):
+        return "monetary_roi"
+    return "incremental_kpi_per_currency"
 
 
 @dataclass
@@ -20,6 +33,7 @@ class ExperimentResult:
             channel="meta",
             experiment_type="geo_lift",
             lift_estimate=0.12,  # 12% lift
+            metric="incremental_kpi_per_currency",
             lift_ci_lower=0.08,
             lift_ci_upper=0.16,
             test_period_weeks=4,
@@ -30,12 +44,23 @@ class ExperimentResult:
     channel: str
     experiment_type: str  # "geo_lift", "holdout", "synthetic_control", "rct"
     lift_estimate: float  # Incremental lift as decimal (0.12 = 12%)
+    metric: CalibrationMetric
     lift_ci_lower: float | None = None
     lift_ci_upper: float | None = None
     test_period_weeks: int | None = None
     test_spend: float | None = None
     test_conversions: float | None = None
     notes: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_metric(self.metric)
+        if self.lift_estimate <= 0:
+            raise ValueError("Experiment lift_estimate must be positive for a LogNormal prior")
+        if (self.lift_ci_lower is None) != (self.lift_ci_upper is None):
+            raise ValueError("Experiment lift confidence interval requires both bounds")
+        if self.lift_ci_lower is not None and self.lift_ci_upper is not None:
+            if self.lift_ci_lower <= 0 or self.lift_ci_upper < self.lift_ci_lower:
+                raise ValueError("Experiment lift confidence interval must be positive and ordered")
 
 
 @dataclass
@@ -52,6 +77,7 @@ class PlatformConversions:
             period_weeks=4,
             attribution_window="7d_click_1d_view",
             spend=25000,
+            metric="incremental_kpi_per_currency",
             notes="From Meta Ads Manager, last 28 days"
         )
     """
@@ -59,8 +85,16 @@ class PlatformConversions:
     platform_conversions: float
     period_weeks: int
     spend: float
+    metric: CalibrationMetric
     attribution_window: str | None = None  # e.g., "7d_click_1d_view"
     notes: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_metric(self.metric)
+        if self.platform_conversions <= 0:
+            raise ValueError("Platform outcome must be positive")
+        if self.period_weeks <= 0:
+            raise ValueError("Platform period_weeks must be positive")
 
 
 @dataclass
@@ -73,6 +107,7 @@ class PriorBelief:
             channel="google_search",
             expected_roi_low=1.5,
             expected_roi_high=3.0,
+            metric="monetary_roi",
             confidence="high",
             source="Historical data from 2023"
         )
@@ -80,8 +115,16 @@ class PriorBelief:
     channel: str
     expected_roi_low: float
     expected_roi_high: float
+    metric: CalibrationMetric
     confidence: str = "medium"  # "high", "medium", "low"
     source: str | None = None  # Where this belief comes from
+
+    def __post_init__(self) -> None:
+        _validate_metric(self.metric)
+        if self.expected_roi_low <= 0 or self.expected_roi_high < self.expected_roi_low:
+            raise ValueError("Prior range must be positive and ordered")
+        if self.confidence not in {"high", "medium", "low"}:
+            raise ValueError("Prior confidence must be high, medium, or low")
 
 
 @dataclass
@@ -96,6 +139,14 @@ class CalibrationData:
     prior_beliefs: list[PriorBelief] = field(default_factory=list)
     control_variables: dict = field(default_factory=dict)  # {column_name: description}
     notes: str = ""
+
+
+def _validate_metric(metric: str) -> None:
+    if metric not in {"monetary_roi", "incremental_kpi_per_currency"}:
+        raise ValueError(
+            "Calibration metric must be 'monetary_roi' or "
+            "'incremental_kpi_per_currency'"
+        )
 
 
 def experiment_to_prior(exp: ExperimentResult) -> dict:
@@ -141,6 +192,7 @@ def experiment_to_prior(exp: ExperimentResult) -> dict:
 
     return {
         "channel": exp.channel,
+        "metric": exp.metric,
         "roi_mean": log_roi,
         "roi_sigma": sigma,
         "source": f"experiment:{exp.experiment_type}"
@@ -160,6 +212,7 @@ def platform_data_to_upper_bound(platform: PlatformConversions) -> dict:
     # Platform data is an upper bound - true ROI is likely 30-70% of this
     return {
         "channel": platform.channel,
+        "metric": platform.metric,
         "roi_upper_bound": platform_roi,
         "suggested_roi_range": (platform_roi * 0.3, platform_roi * 0.7),
         "source": f"platform:{platform.attribution_window or 'default'}"
@@ -185,19 +238,47 @@ def belief_to_prior(belief: PriorBelief) -> dict:
 
     return {
         "channel": belief.channel,
+        "metric": belief.metric,
         "roi_mean": log_roi,
         "roi_sigma": sigma,
         "source": f"belief:{belief.source or 'user_input'}"
     }
 
 
-def calculate_channel_priors(calibration: CalibrationData) -> dict[str, dict]:
+def calculate_channel_priors(
+    calibration: CalibrationData,
+    *,
+    expected_metric: CalibrationMetric | None = None,
+) -> dict[str, dict]:
     """
     Combine all calibration data to compute per-channel priors.
 
     Priority: Experiments > Platform data > Prior beliefs > Default
     """
     import math
+
+    records: list[ExperimentResult | PlatformConversions | PriorBelief] = [
+        *calibration.experiments,
+        *calibration.platform_conversions,
+        *calibration.prior_beliefs,
+    ]
+    metrics = {record.metric for record in records}
+    supported_metrics = {"monetary_roi", "incremental_kpi_per_currency"}
+    if not metrics.issubset(supported_metrics):
+        raise ValueError(
+            "Unsupported calibration metric(s): "
+            + ", ".join(sorted(metrics - supported_metrics))
+        )
+    if len(metrics) > 1:
+        raise ValueError(
+            "Calibration records mix incompatible metrics: " + ", ".join(sorted(metrics))
+        )
+    if expected_metric is not None and metrics and metrics != {expected_metric}:
+        actual = next(iter(metrics))
+        raise ValueError(
+            f"Calibration metric '{actual}' does not match the model outcome "
+            f"metric '{expected_metric}'"
+        )
 
     channel_priors = {}
 
@@ -223,6 +304,7 @@ def calculate_channel_priors(calibration: CalibrationData) -> dict[str, dict]:
         else:
             channel_priors[ch] = {
                 "channel": ch,
+                "metric": platform.metric,
                 "roi_mean": math.log(max(bounds["suggested_roi_range"][1], 1e-8)),
                 "roi_sigma": 0.7,  # Moderate uncertainty
                 "platform_upper_bound": bounds["roi_upper_bound"],
@@ -260,6 +342,7 @@ def calculate_channel_priors(calibration: CalibrationData) -> dict[str, dict]:
 
         channel_priors[channel] = {
             "channel": channel,
+            "metric": priors[0]["metric"],
             "roi_mean": avg_mean,
             "roi_sigma": combined_sigma,
             "source": f"experiment:averaged({len(priors)})"
@@ -278,6 +361,7 @@ def save_calibration(calibration: CalibrationData, path: Path | str) -> None:
                 "channel": e.channel,
                 "experiment_type": e.experiment_type,
                 "lift_estimate": e.lift_estimate,
+                "metric": e.metric,
                 "lift_ci_lower": e.lift_ci_lower,
                 "lift_ci_upper": e.lift_ci_upper,
                 "test_period_weeks": e.test_period_weeks,
@@ -293,6 +377,7 @@ def save_calibration(calibration: CalibrationData, path: Path | str) -> None:
                 "platform_conversions": p.platform_conversions,
                 "period_weeks": p.period_weeks,
                 "spend": p.spend,
+                "metric": p.metric,
                 "attribution_window": p.attribution_window,
                 "notes": p.notes
             }
@@ -303,6 +388,7 @@ def save_calibration(calibration: CalibrationData, path: Path | str) -> None:
                 "channel": b.channel,
                 "expected_roi_low": b.expected_roi_low,
                 "expected_roi_high": b.expected_roi_high,
+                "metric": b.metric,
                 "confidence": b.confidence,
                 "source": b.source
             }
@@ -323,61 +409,33 @@ def load_calibration(path: Path | str) -> CalibrationData:
     with open(path) as f:
         data = json.load(f)
 
-    return CalibrationData(
-        experiments=[
-            ExperimentResult(**e) for e in data.get("experiments", [])
-        ],
-        platform_conversions=[
-            PlatformConversions(**p) for p in data.get("platform_conversions", [])
-        ],
-        prior_beliefs=[
-            PriorBelief(**b) for b in data.get("prior_beliefs", [])
-        ],
-        control_variables=data.get("control_variables", {}),
-        notes=data.get("notes", "")
-    )
+    try:
+        return CalibrationData(
+            experiments=[ExperimentResult(**e) for e in data.get("experiments", [])],
+            platform_conversions=[
+                PlatformConversions(**p) for p in data.get("platform_conversions", [])
+            ],
+            prior_beliefs=[PriorBelief(**b) for b in data.get("prior_beliefs", [])],
+            control_variables=data.get("control_variables", {}),
+            notes=data.get("notes", ""),
+        )
+    except TypeError as error:
+        if "metric" in str(error):
+            raise ValueError(
+                "Every calibration record must declare metric as "
+                "'monetary_roi' or 'incremental_kpi_per_currency'"
+            ) from error
+        raise
 
 
 # Template for users to fill in
 CALIBRATION_TEMPLATE = """
 {
-  "experiments": [
-    {
-      "channel": "meta",
-      "experiment_type": "geo_lift",
-      "lift_estimate": 0.12,
-      "lift_ci_lower": 0.08,
-      "lift_ci_upper": 0.16,
-      "test_period_weeks": 4,
-      "test_spend": 50000,
-      "test_conversions": 10000,
-      "notes": "Ran in CA, OR, WA vs control in TX, FL, GA"
-    }
-  ],
-  "platform_conversions": [
-    {
-      "channel": "meta",
-      "platform_conversions": 5000,
-      "period_weeks": 4,
-      "spend": 25000,
-      "attribution_window": "7d_click_1d_view",
-      "notes": "From Meta Ads Manager"
-    }
-  ],
-  "prior_beliefs": [
-    {
-      "channel": "google_search",
-      "expected_roi_low": 1.5,
-      "expected_roi_high": 3.0,
-      "confidence": "high",
-      "source": "Historical performance data"
-    }
-  ],
-  "control_variables": {
-    "is_promotion": "Binary flag for promotion weeks",
-    "seasonality": "Seasonal index (1.0 = normal)"
-  },
-  "notes": "Q4 2025 calibration data"
+  "experiments": [],
+  "platform_conversions": [],
+  "prior_beliefs": [],
+  "control_variables": {},
+  "notes": "Add only measured calibration data. See data/calibration_example.json."
 }
 """
 

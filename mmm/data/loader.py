@@ -144,6 +144,8 @@ def load_mmm_data(
         config.date_column = "time"
     if config.date_column in df.columns:
         df[config.date_column] = pd.to_datetime(df[config.date_column], errors="raise")
+    if config.kpi_column.lower() == "revenue":
+        config.kpi_type = "revenue"
 
     # Validate required columns exist
     required_cols = [config.date_column, config.geo_column, config.kpi_column]
@@ -176,6 +178,8 @@ def load_mmm_data(
                 break
     if config.revenue_column is None and "revenue" in df.columns:
         config.revenue_column = "revenue"
+    if config.population_column is None and "population" in df.columns:
+        config.population_column = "population"
 
     # Extract metadata
     date_range = (df[config.date_column].min().date(), df[config.date_column].max().date())

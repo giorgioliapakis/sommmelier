@@ -16,3 +16,16 @@ def test_validate_returns_nonzero_for_invalid_dataset():
 
     assert result.exit_code == 1
     assert "Result: FAILED" in result.output
+
+
+def test_analyze_blocks_results_that_failed_quality_checks(tmp_path):
+    results = tmp_path / "results.json"
+    results.write_text(
+        '{"run_manifest": {"status": "complete", "quality_status": "failed"}}'
+    )
+
+    result = runner.invoke(app, ["analyze", str(results)])
+
+    assert result.exit_code == 2
+    assert "Recommendations blocked" in result.output
+    assert "model quality status is failed" in result.output

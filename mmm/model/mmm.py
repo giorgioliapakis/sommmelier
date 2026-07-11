@@ -1,11 +1,19 @@
 """Main Sommmelier model wrapper around Meridian."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mmm.data.schema import MMMDataset
-from mmm.meridian_compat import extract_optimization_result, serialize_model_review
+from mmm.meridian_compat import (
+    extract_channel_contributions,
+    extract_optimization_result,
+    extract_predictive_accuracy,
+    extract_rhat_diagnostics,
+    serialize_model_review,
+    summarize_channel_tensor,
+)
 from mmm.model.builder import build_meridian_input
 
 if TYPE_CHECKING:
@@ -196,6 +204,8 @@ class AutoMMM:
         """
         if self._meridian is None:
             self.prepare(calibration_priors=calibration_priors)
+        if self._meridian is None:
+            raise RuntimeError("Model preparation did not initialize Meridian")
 
         # Sample from prior (optional but recommended)
         if sample_prior:
@@ -217,33 +227,34 @@ class AutoMMM:
 
     def _extract_results(self) -> ModelResults:
         """Extract results from fitted Meridian model."""
-        from meridian.analysis import summarizer
+        if self._meridian is None:
+            raise ValueError("Model must be prepared before extracting results")
 
+        from meridian.analysis import analyzer
+
+        mmm_analyzer = analyzer.Analyzer(self._meridian)
         results = ModelResults(meridian_model=self._meridian)
 
-        try:
-            # Get model summary
-            mmm_summarizer = summarizer.Summarizer(self._meridian)
+        roi = summarize_channel_tensor(
+            mmm_analyzer.roi(use_posterior=True), self.dataset.media_channels
+        )
+        results.channel_roi = {channel: summary["mean"] for channel, summary in roi.items()}
 
-            # Extract ROI estimates
-            roi_summary = mmm_summarizer.get_roi_summary()
-            if roi_summary is not None:
-                for channel in self.dataset.media_channels:
-                    if channel in roi_summary.index:
-                        results.channel_roi[channel] = float(roi_summary.loc[channel, "mean"])
+        contributions = extract_channel_contributions(
+            mmm_analyzer.incremental_outcome(use_posterior=True),
+            self.dataset.media_channels,
+        )
+        results.channel_contributions = {
+            channel: summary["absolute"] for channel, summary in contributions.items()
+        }
 
-            # Extract contributions
-            contrib_summary = mmm_summarizer.get_contribution_summary()
-            if contrib_summary is not None:
-                for channel in self.dataset.media_channels:
-                    if channel in contrib_summary.index:
-                        results.channel_contributions[channel] = float(
-                            contrib_summary.loc[channel, "contribution"]
-                        )
+        accuracy = extract_predictive_accuracy(mmm_analyzer.predictive_accuracy())
+        results.r_squared = accuracy.get("r_squared")
+        results.mape = accuracy.get("mape")
 
-        except Exception:
-            # Results extraction failed, return partial results
-            pass
+        diagnostics = extract_rhat_diagnostics(mmm_analyzer.rhat_summary())
+        results.convergence_passed = diagnostics["convergence_ok"]
+        results.r_hat_max = diagnostics["max_rhat"]
 
         return results
 
@@ -285,6 +296,11 @@ class AutoMMM:
         """
         if self._meridian is None:
             raise ValueError("Model must be fitted first. Call fit() before optimize_budget().")
+        if constraints:
+            raise NotImplementedError(
+                "Per-channel constraints are not supported by this wrapper yet; "
+                "omit constraints rather than assuming they were applied"
+            )
 
         from meridian.analysis import optimizer
 
@@ -301,31 +317,115 @@ class AutoMMM:
         return allocation
 
     def save(self, path: str | Path) -> None:
-        """Save the fitted model to disk."""
-        import pickle
+        """Save a non-executable model bundle using protobuf, Parquet, and JSON."""
+        import json
+        import shutil
+        import tempfile
 
+        if self._meridian is None or self._results is None:
+            raise ValueError("Model must be fitted before it can be saved")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            raise FileExistsError(f"Model bundle already exists: {path}")
 
-        with open(path, "wb") as f:
-            pickle.dump({
-                "meridian": self._meridian,
-                "dataset": self.dataset,
-                "config": self.config,
-                "results": self._results,
-            }, f)
+        from meridian.schema.serde import meridian_serde
+
+        temporary_path = Path(tempfile.mkdtemp(prefix=f".{path.name}-", dir=path.parent))
+        try:
+            meridian_serde.save_meridian(
+                self._meridian,
+                str(temporary_path / "model.binpb"),
+            )
+            self.dataset.df.to_parquet(temporary_path / "dataset.parquet", index=False)
+
+            model_config = {
+                item.name: (
+                    str(getattr(self.config, item.name))
+                    if item.name == "output_dir"
+                    else getattr(self.config, item.name)
+                )
+                for item in fields(ModelConfig)
+            }
+            result_data = {
+                item.name: getattr(self._results, item.name)
+                for item in fields(ModelResults)
+                if item.name != "meridian_model"
+            }
+            metadata = {
+                "schema_version": 1,
+                "dataset": {
+                    "config": self.dataset.config.model_dump(mode="json"),
+                    "date_range": [value.isoformat() for value in self.dataset.date_range],
+                    "geos": self.dataset.geos,
+                    "n_time_periods": self.dataset.n_time_periods,
+                    "n_geos": self.dataset.n_geos,
+                    "media_channels": self.dataset.media_channels,
+                    "total_spend": self.dataset.total_spend,
+                    "total_kpi": self.dataset.total_kpi,
+                },
+                "model_config": model_config,
+                "results": result_data,
+            }
+            (temporary_path / "metadata.json").write_text(
+                json.dumps(metadata, indent=2, allow_nan=False)
+            )
+            temporary_path.rename(path)
+        except Exception:
+            shutil.rmtree(temporary_path, ignore_errors=True)
+            raise
 
     @classmethod
     def load(cls, path: str | Path) -> "AutoMMM":
-        """Load a fitted model from disk."""
-        import pickle
+        """Load a protobuf/Parquet/JSON model bundle created by :meth:`save`."""
+        import json
 
-        with open(path, "rb") as f:
-            data = pickle.load(f)
+        import pandas as pd
+        from meridian.schema.serde import meridian_serde
 
-        instance = cls(data["dataset"], data["config"])
-        instance._meridian = data["meridian"]
-        instance._results = data["results"]
+        from mmm.data.schema import DataConfig
+
+        path = Path(path)
+        if not path.is_dir():
+            raise FileNotFoundError(f"Model bundle directory not found: {path}")
+
+        required_files = ("model.binpb", "dataset.parquet", "metadata.json")
+        missing_files = [name for name in required_files if not (path / name).is_file()]
+        if missing_files:
+            raise ValueError("Invalid model bundle; missing: " + ", ".join(missing_files))
+
+        metadata = json.loads((path / "metadata.json").read_text())
+        if metadata.get("schema_version") != 1:
+            raise ValueError(
+                f"Unsupported model bundle schema: {metadata.get('schema_version')}"
+            )
+
+        dataset_data = metadata["dataset"]
+        date_values = dataset_data["date_range"]
+        if not isinstance(date_values, list) or len(date_values) != 2:
+            raise ValueError("Invalid model bundle date_range")
+        date_range = (
+            date.fromisoformat(date_values[0]),
+            date.fromisoformat(date_values[1]),
+        )
+        dataset = MMMDataset(
+            df=pd.read_parquet(path / "dataset.parquet"),
+            config=DataConfig.model_validate(dataset_data["config"]),
+            date_range=date_range,
+            geos=dataset_data["geos"],
+            n_time_periods=dataset_data["n_time_periods"],
+            n_geos=dataset_data["n_geos"],
+            media_channels=dataset_data["media_channels"],
+            total_spend=dataset_data["total_spend"],
+            total_kpi=dataset_data["total_kpi"],
+        )
+        model_config_data = metadata["model_config"]
+        model_config_data["output_dir"] = Path(model_config_data["output_dir"])
+        instance = cls(dataset, ModelConfig(**model_config_data))
+        instance._meridian = meridian_serde.load_meridian(str(path / "model.binpb"))
+        instance._results = ModelResults(
+            **metadata["results"], meridian_model=instance._meridian
+        )
 
         return instance
 

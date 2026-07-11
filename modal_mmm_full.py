@@ -45,6 +45,8 @@ def fit_mmm_full(
     holdout_weeks: int = 0,  # Number of trailing weeks to hold out (0 = no holdout)
     adstock_overrides: dict | None = None,  # {"channel": "geometric"|"binomial"}
     force_aks: bool | None = None,  # None=auto, True=force AKS, False=force manual knots
+    allow_population_estimates: bool = False,
+    allow_impression_estimates: bool = False,
 ) -> dict:
     """
     Fit MMM model and extract comprehensive results for visualization.
@@ -63,10 +65,18 @@ def fit_mmm_full(
 
     from mmm.detection import detect_columns
     from mmm.meridian_compat import (
+        extract_channel_contributions,
         extract_optimization_result,
+        extract_predictive_accuracy,
         extract_rhat_diagnostics,
         save_chart,
         serialize_model_review,
+        summarize_channel_tensor,
+    )
+    from mmm.result_manifest import (
+        create_run_manifest,
+        finalize_run_manifest,
+        record_section_error,
     )
 
     # Monkey-patch numpy 2.x compatibility for TFP
@@ -139,6 +149,12 @@ def fit_mmm_full(
             imp_col = channel["impressions_column"]
 
             if imp_col is None:
+                if not allow_impression_estimates:
+                    raise ValueError(
+                        f"Channel '{ch}' needs impressions or reach/frequency data. "
+                        "Pass --allow-impression-estimates only when the coarse "
+                        "$10 CPM fallback is acceptable."
+                    )
                 imp_col = f"{ch}_impression"
                 df[imp_col] = df[spend_col] * 100  # Assume $10 CPM
                 print(f"  Estimated impressions for {ch} from spend")
@@ -157,6 +173,15 @@ def fit_mmm_full(
     if len(df) != expected_rows:
         raise ValueError(
             f"Geo/time panel is incomplete: expected {expected_rows} rows, found {len(df)}"
+        )
+    unique_dates = pd.Series(df["time"].drop_duplicates().sort_values())
+    cadence_days = unique_dates.diff().dropna().dt.days
+    irregular_cadence = sorted(set(cadence_days[cadence_days != 7].astype(int).tolist()))
+    if irregular_cadence:
+        raise ValueError(
+            "Model data must use exact weekly cadence; found gaps of "
+            + ", ".join(map(str, irregular_cadence))
+            + " days"
         )
     numeric_columns = [kpi_column, *spend_cols_by_channel.values()]
     if df[numeric_columns].isna().any().any():
@@ -187,6 +212,11 @@ def fit_mmm_full(
     control_cols = list(detected.control_columns)
 
     if 'population' not in df.columns:
+        if not allow_population_estimates:
+            raise ValueError(
+                "A population column is required. Pass --allow-population-estimates "
+                "only when the coarse built-in fallback is acceptable."
+            )
         pop_map = {'US': 330_000_000, 'UK': 67_000_000, 'AU': 26_000_000}
         df['population'] = df['geo'].map(lambda x: pop_map.get(x, 10_000_000))
 
@@ -418,6 +448,7 @@ def fit_mmm_full(
 
     results = {
         "timestamp": datetime.now().isoformat(),
+        "run_manifest": create_run_manifest(),
         "metadata": {
             "meridian_version": version("google-meridian"),
             "n_time_periods": n_periods,
@@ -438,6 +469,8 @@ def fit_mmm_full(
                 "use_aks": use_aks,
                 "adstock_decay_spec": adstock_decay_spec,
                 "holdout_weeks": holdout_weeks,
+                "allow_population_estimates": allow_population_estimates,
+                "allow_impression_estimates": allow_impression_estimates,
             },
         },
         "roi": {},
@@ -461,53 +494,33 @@ def fit_mmm_full(
     # 1. ROI per channel
     print("Extracting ROI...")
     try:
-        roi_tensor = mmm_analyzer.roi(use_posterior=True)
-        roi_np = roi_tensor.numpy()
-        roi_mean = roi_np.mean(axis=(0, 1))
-        roi_std = roi_np.std(axis=(0, 1))
-        roi_q05 = np.percentile(roi_np, 5, axis=(0, 1))
-        roi_q95 = np.percentile(roi_np, 95, axis=(0, 1))
-
-        for i, ch in enumerate(channels):
-            results["roi"][ch] = {
-                "mean": float(roi_mean[i]),
-                "std": float(roi_std[i]),
-                "ci_lower": float(roi_q05[i]),
-                "ci_upper": float(roi_q95[i]),
-            }
+        results["roi"] = summarize_channel_tensor(
+            mmm_analyzer.roi(use_posterior=True), channels
+        )
     except Exception as e:
         print(f"Warning: ROI extraction failed: {e}")
+        record_section_error(results, "roi", e, required=True)
 
     # 1b. CPIK (cost per incremental KPI) - inverse of ROI, more intuitive for marketers
     print("Extracting CPIK...")
     try:
-        cpik_tensor = mmm_analyzer.cpik()
-        cpik_np = cpik_tensor.numpy()
-        cpik_mean = cpik_np.mean(axis=(0, 1))
-
-        for i, ch in enumerate(channels):
-            results["cpik"][ch] = float(cpik_mean[i])
+        cpik_summary = summarize_channel_tensor(mmm_analyzer.cpik(), channels)
+        results["cpik"] = {
+            channel: summary["mean"] for channel, summary in cpik_summary.items()
+        }
     except Exception as e:
         print(f"Warning: CPIK extraction failed: {e}")
+        record_section_error(results, "cpik", e)
 
     # 2. Contributions
     print("Extracting contributions...")
     try:
-        incremental = mmm_analyzer.incremental_outcome(use_posterior=True)
-        inc_np = incremental.numpy().mean(axis=(0, 1))
-        if len(inc_np.shape) > 1:
-            inc_sum = inc_np.sum(axis=tuple(range(len(inc_np.shape) - 1)))
-        else:
-            inc_sum = inc_np
-        total = inc_sum.sum()
-
-        for i, ch in enumerate(channels):
-            results["contributions"][ch] = {
-                "absolute": float(inc_sum[i]),
-                "percentage": float(inc_sum[i] / total * 100) if total > 0 else 0,
-            }
+        results["contributions"] = extract_channel_contributions(
+            mmm_analyzer.incremental_outcome(use_posterior=True), channels
+        )
     except Exception as e:
         print(f"Warning: Contribution extraction failed: {e}")
+        record_section_error(results, "contributions", e, required=True)
 
     # 3. Response curves (spend vs outcome)
     print("Extracting response curves...")
@@ -540,6 +553,7 @@ def fit_mmm_full(
                 print(f"  Response curves xarray: vars={list(response_ds.data_vars)}, dims={dict(response_ds.dims)}")
     except Exception as e:
         print(f"Warning: Response curves extraction failed: {e}")
+        record_section_error(results, "response_curves", e)
 
     # 4. Adstock decay
     print("Extracting adstock decay...")
@@ -567,6 +581,7 @@ def fit_mmm_full(
                             }
     except Exception as e:
         print(f"Warning: Adstock decay extraction failed: {e}")
+        record_section_error(results, "adstock_decay", e)
 
     # 5. Marginal ROI (ROI at current spend levels)
     print("Extracting marginal ROI...")
@@ -579,6 +594,7 @@ def fit_mmm_full(
             results["marginal_roi"][ch] = float(mroi_mean[i])
     except Exception as e:
         print(f"Warning: Marginal ROI extraction failed: {e}")
+        record_section_error(results, "marginal_roi", e)
 
     # 5b. Optimal frequency for R&F channels
     if rf_channels:
@@ -605,8 +621,10 @@ def fit_mmm_full(
                             results["optimal_frequency"][ch] = float(val.values)
                         except Exception as e:
                             print(f"  Warning: Could not extract optimal freq for {ch}: {e}")
+                            record_section_error(results, "optimal_frequency", e)
         except Exception as e:
             print(f"Warning: Optimal frequency extraction failed: {e}")
+            record_section_error(results, "optimal_frequency", e)
 
     # 5c. Organic media contributions
     # Organic channels are not in summary_metrics (which only covers paid media).
@@ -634,6 +652,7 @@ def fit_mmm_full(
                     results["organic_contributions"][ch] = {"included_in_model": True}
         except Exception as e:
             print(f"Warning: Organic contribution extraction failed: {e}")
+            record_section_error(results, "organic_contributions", e)
             for ch in organic_channels:
                 results["organic_contributions"][ch] = {"included_in_model": True}
 
@@ -656,46 +675,19 @@ def fit_mmm_full(
                         results["treatment_effects"][tname]["baseline_impact"] = float(mean_val.values)
         except Exception as e:
             print(f"Warning: Treatment effects extraction failed: {e}")
+            record_section_error(results, "treatment_effects", e)
 
     # 6. Model fit (R-squared, MAPE) - critical for model quality tracking
     print("Extracting model fit metrics...")
     try:
         accuracy_ds = mmm_analyzer.predictive_accuracy()
-        if accuracy_ds is not None:
-            # Debug: show full structure
-            print(f"  Dims: {dict(accuracy_ds.dims)}")
-            print(f"  Coords: {list(accuracy_ds.coords)}")
-            print(f"  Data vars: {list(accuracy_ds.data_vars)}")
-
-            # xarray stores metrics as coordinates with 'metric' dimension
-            if 'metric' in accuracy_ds.dims or 'metric' in accuracy_ds.coords:
-                # Iterate through metrics
-                for metric_name in accuracy_ds.coords.get('metric', accuracy_ds.dims.get('metric', [])).values:
-                    metric_name_str = str(metric_name)
-                    try:
-                        # Get value for this metric, averaged across geo_granularity
-                        val = accuracy_ds.sel(metric=metric_name)['value'].values
-                        val_float = float(val.mean()) if val.size > 1 else float(val)
-                        print(f"  {metric_name_str}: {val_float:.4f}")
-
-                        # Store with standardized names
-                        metric_lower = metric_name_str.lower().replace('_', '')
-                        if metric_lower == 'rsquared' or metric_name_str == 'R_Squared':
-                            results["model_fit"]["r_squared"] = val_float
-                        elif metric_lower == 'wmape' or metric_name_str == 'wMAPE':
-                            results["model_fit"]["wmape"] = val_float
-                        elif metric_lower == 'mape' or metric_name_str == 'MAPE':
-                            results["model_fit"]["mape"] = val_float
-                    except Exception as e2:
-                        print(f"  Could not extract {metric_name_str}: {e2}")
-            else:
-                # Fallback: just print everything
-                print(f"  Full dataset:\n{accuracy_ds}")
+        results["model_fit"] = extract_predictive_accuracy(accuracy_ds)
+        for metric_name, value in results["model_fit"].items():
+            print(f"  {metric_name}: {value:.4f}")
 
     except Exception as e:
-        import traceback
         print(f"Warning: Model fit extraction failed: {e}")
-        traceback.print_exc()
+        record_section_error(results, "model_fit", e, required=True)
 
     # 6b. Holdout validation (if holdout was requested)
     if holdout_id is not None:
@@ -718,6 +710,7 @@ def fit_mmm_full(
                 print(f"  Holdout validation: {results.get('holdout_validation', {})}")
         except Exception as e:
             print(f"Warning: Holdout validation extraction failed: {e}")
+            record_section_error(results, "holdout_validation", e)
 
     # 7. MCMC diagnostics (R-hat)
     print("Extracting MCMC diagnostics...")
@@ -726,6 +719,7 @@ def fit_mmm_full(
         results["diagnostics"].update(extract_rhat_diagnostics(rhat_df))
     except Exception as e:
         print(f"Warning: Diagnostics extraction failed: {e}")
+        record_section_error(results, "diagnostics", e, required=True)
         results["diagnostics"].update({
             "convergence_ok": False,
             "diagnostics_available": False,
@@ -755,6 +749,7 @@ def fit_mmm_full(
     except Exception as e:
         print(f"Warning: ModelReviewer failed: {e}")
         results["model_review"] = {}
+        record_section_error(results, "model_review", e)
 
     # 8b. Native Meridian visualizations (generate PNGs on GPU)
     # Meridian 1.4.x visualizer classes: MediaSummary, MediaEffects, ModelFit, ModelDiagnostics
@@ -802,12 +797,14 @@ def fit_mmm_full(
                 print(f"  Saved {chart_name}")
             except Exception as e_chart:
                 print(f"  Warning: {chart_name} failed: {e_chart}")
+                record_section_error(results, "charts", e_chart)
 
         print(f"  Generated {len(results['charts'])} charts in {chart_dir}")
 
     except Exception as e:
         print(f"Warning: Native chart generation failed: {e}")
         results["charts"] = {}
+        record_section_error(results, "charts", e)
 
     # 9. Budget optimization
     if run_optimization:
@@ -832,11 +829,18 @@ def fit_mmm_full(
                         }
                 except Exception as e:
                     print(f"  Warning: Optimization for {name} failed: {e}")
+                    record_section_error(results, "optimization", e)
 
         except Exception as e:
             print(f"Warning: Budget optimization failed: {e}")
+            record_section_error(results, "optimization", e)
 
     print("Results extracted successfully!")
+    manifest = finalize_run_manifest(results)
+    print(
+        f"Run status: {manifest['status']}; "
+        f"model quality: {manifest['quality_status']}"
+    )
 
     # Save to volume
     output_path = f"/outputs/full_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -862,6 +866,8 @@ def main(
     report: bool = False,
     calibration: str = "",  # Path to calibration.json
     holdout_weeks: int = 0,  # Hold out last N weeks for validation (~$0.30 extra GPU)
+    allow_population_estimates: bool = False,
+    allow_impression_estimates: bool = False,
 ):
     """
     Run full MMM analysis from command line.
@@ -872,8 +878,17 @@ def main(
         modal run modal_mmm_full.py --data data/raw/mydata.csv --holdout-weeks 8
         modal run modal_mmm_full.py --data data/raw/mydata.csv --max-lag 12 --n-keep 1000
     """
+    import csv
+    import io
     import json
     from pathlib import Path
+
+    from mmm.calibration import (
+        calculate_channel_priors,
+        infer_calibration_metric,
+        load_calibration,
+    )
+    from mmm.result_manifest import finalize_run_manifest, record_section_error
 
     data_path = Path(data)
     if not data_path.exists():
@@ -881,6 +896,8 @@ def main(
 
     print(f"Reading data from {data_path}...")
     data_csv = data_path.read_text()
+    columns = next(csv.reader(io.StringIO(data_csv)))
+    calibration_metric = infer_calibration_metric(columns, kpi_column)
 
     # Load calibration data if provided
     calibration_priors = None
@@ -889,17 +906,13 @@ def main(
         if calibration_path.exists():
             print(f"Loading calibration from {calibration_path}...")
             try:
-                # Import locally to avoid requiring mmm package on Modal worker
-                import sys
-                sys.path.insert(0, str(Path(__file__).parent))
-                from mmm.calibration import calculate_channel_priors, load_calibration
-
                 cal_data = load_calibration(calibration_path)
-                calibration_priors = calculate_channel_priors(cal_data)
+                calibration_priors = calculate_channel_priors(
+                    cal_data, expected_metric=calibration_metric
+                )
                 print(f"Loaded calibration with {len(calibration_priors)} channel priors")
             except Exception as e:
-                print(f"Warning: Could not load calibration: {e}")
-                print("Proceeding with default priors")
+                raise ValueError(f"Could not load explicit calibration file: {e}") from e
         else:
             print(f"Warning: Calibration file not found: {calibration}")
     else:
@@ -908,15 +921,13 @@ def main(
         if default_cal.exists():
             print(f"Found default calibration file: {default_cal}")
             try:
-                import sys
-                sys.path.insert(0, str(Path(__file__).parent))
-                from mmm.calibration import calculate_channel_priors, load_calibration
-
                 cal_data = load_calibration(default_cal)
-                calibration_priors = calculate_channel_priors(cal_data)
+                calibration_priors = calculate_channel_priors(
+                    cal_data, expected_metric=calibration_metric
+                )
                 print(f"Loaded calibration with {len(calibration_priors)} channel priors")
             except Exception as e:
-                print(f"Warning: Could not load calibration: {e}")
+                raise ValueError(f"Could not load default calibration file: {e}") from e
 
     print("Submitting full analysis to Modal GPU...")
     print("(This may take 30-45 minutes)")
@@ -932,6 +943,8 @@ def main(
         max_lag=max_lag,
         calibration_priors=calibration_priors,
         holdout_weeks=holdout_weeks,
+        allow_population_estimates=allow_population_estimates,
+        allow_impression_estimates=allow_impression_estimates,
     )
 
     # Print summary
@@ -939,13 +952,19 @@ def main(
     print("MMM ANALYSIS RESULTS")
     print("=" * 60)
 
-    print("\n## Channel ROI (Return on Investment)")
+    roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
+    roi_label = "Channel ROI (Return on Investment)" if roi_is_monetary else "Channel KPI Efficiency"
+    roi_suffix = "x" if roi_is_monetary else " KPI/currency"
+    print(f"\n## {roi_label}")
     print("-" * 40)
     for ch, data in sorted(results.get("roi", {}).items(), key=lambda x: -x[1].get("mean", 0)):
         mean = data.get("mean", 0)
         ci_lo = data.get("ci_lower", 0)
         ci_hi = data.get("ci_upper", 0)
-        print(f"  {ch:12s}: {mean:.2f}x  (90% CI: {ci_lo:.2f} - {ci_hi:.2f})")
+        print(
+            f"  {ch:12s}: {mean:.2f}{roi_suffix}  "
+            f"(90% CI: {ci_lo:.2f} - {ci_hi:.2f})"
+        )
 
     print("\n## Channel Contributions")
     print("-" * 40)
@@ -959,10 +978,15 @@ def main(
         for ch, cpik in sorted(results.get("cpik", {}).items(), key=lambda x: x[1]):
             print(f"  {ch:12s}: ${cpik:.2f}")
 
-    print("\n## Marginal ROI (ROI at current spend)")
+    marginal_label = (
+        "Marginal ROI (ROI at current spend)"
+        if roi_is_monetary
+        else "Marginal KPI Efficiency (at current spend)"
+    )
+    print(f"\n## {marginal_label}")
     print("-" * 40)
     for ch, mroi in sorted(results.get("marginal_roi", {}).items(), key=lambda x: -x[1]):
-        print(f"  {ch:12s}: {mroi:.2f}x")
+        print(f"  {ch:12s}: {mroi:.2f}{roi_suffix}")
 
     if results.get("diagnostics", {}).get("convergence_ok"):
         print("\n[OK] Model convergence: Good (all R-hat < 1.1)")
@@ -988,10 +1012,22 @@ def main(
             downloaded_charts[chart_name] = str(local_path)
         except Exception as e:
             print(f"Warning: Could not download chart {chart_name}: {e}")
+            record_section_error(results, "charts", e)
     results["charts"] = downloaded_charts
+    manifest = finalize_run_manifest(results)
 
     output_path.write_text(json.dumps(results, indent=2, default=str))
     print(f"\nFull results saved to: {output_path}")
+
+    if manifest["status"] == "failed":
+        failed_sections = [
+            section
+            for section, status in manifest["sections"].items()
+            if status != "complete" and section in manifest["required_sections"]
+        ]
+        raise RuntimeError(
+            "MMM run did not produce required sections: " + ", ".join(failed_sections)
+        )
 
     # Generate HTML report if requested
     if report:

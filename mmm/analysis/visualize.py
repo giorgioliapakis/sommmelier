@@ -44,8 +44,9 @@ def generate_roi_chart_svg(results: dict) -> str:
     results = normalize_results(results)
     roi_data = results.get("roi", {})
     roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
+    roi_unit = "x" if roi_is_monetary else " KPI/currency"
     if not roi_data:
-        return "<p>No ROI data available</p>"
+        return "<p>No channel-efficiency data available</p>"
 
     # Sort by ROI
     sorted_channels = sorted(roi_data.items(), key=lambda x: -x[1].get("mean", 0))
@@ -87,7 +88,7 @@ def generate_roi_chart_svg(results: dict) -> str:
         <g transform="translate(0, {y})">
             <text x="{label_width - 10}" y="{bar_height/2 + 5}" text-anchor="end" font-size="14" fill="#374151">{escape(str(ch))}</text>
             <rect x="{label_width}" y="5" width="{bar_width}" height="{bar_height - 10}" fill="{color}" rx="4"/>
-            <text x="{label_width + bar_width + 10}" y="{bar_height/2 + 5}" font-size="14" font-weight="bold" fill="#1f2937">{roi:.2f}x</text>
+            <text x="{label_width + bar_width + 10}" y="{bar_height/2 + 5}" font-size="14" font-weight="bold" fill="#1f2937">{roi:.2f}{roi_unit}</text>
             <line x1="{label_width + ci_lo * scale}" y1="{bar_height/2}" x2="{label_width + ci_hi * scale}" y2="{bar_height/2}" stroke="#6b7280" stroke-width="2"/>
         </g>
         ''')
@@ -194,6 +195,9 @@ def generate_marginal_roi_chart_svg(results: dict) -> str:
     results = normalize_results(results)
     roi_data = results.get("roi", {})
     mroi_data = results.get("marginal_roi", {})
+    roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
+    metric_name = "ROI" if roi_is_monetary else "KPI efficiency"
+    unit = "x" if roi_is_monetary else " KPI/currency"
 
     if not roi_data or not mroi_data:
         return "<p>No marginal ROI data available</p>"
@@ -223,20 +227,20 @@ def generate_marginal_roi_chart_svg(results: dict) -> str:
 
             <!-- Average ROI bar -->
             <rect x="{label_width}" y="0" width="{max(avg_roi * scale, 2)}" height="12" fill="#3b82f6" rx="2"/>
-            <text x="{label_width + avg_roi * scale + 5}" y="10" font-size="11" fill="#3b82f6">{avg_roi:.2f}x avg</text>
+            <text x="{label_width + avg_roi * scale + 5}" y="10" font-size="11" fill="#3b82f6">{avg_roi:.2f}{unit} avg</text>
 
             <!-- Marginal ROI bar -->
             <rect x="{label_width}" y="16" width="{max(m_roi * scale, 2)}" height="12" fill="#22c55e" rx="2"/>
-            <text x="{label_width + m_roi * scale + 5}" y="26" font-size="11" fill="#22c55e">{m_roi:.2f}x marginal</text>
+            <text x="{label_width + m_roi * scale + 5}" y="26" font-size="11" fill="#22c55e">{m_roi:.2f}{unit} marginal</text>
         </g>
         ''')
 
     legend = f'''
     <g transform="translate({label_width}, {chart_height - 15})">
         <rect width="12" height="12" fill="#3b82f6" rx="2"/>
-        <text x="18" y="10" font-size="11" fill="#374151">Average ROI</text>
+        <text x="18" y="10" font-size="11" fill="#374151">Average {metric_name}</text>
         <rect x="120" width="12" height="12" fill="#22c55e" rx="2"/>
-        <text x="138" y="10" font-size="11" fill="#374151">Marginal ROI (at current spend)</text>
+        <text x="138" y="10" font-size="11" fill="#374151">Marginal {metric_name} (at current spend)</text>
     </g>
     '''
 
@@ -284,6 +288,8 @@ def generate_insights(results: dict) -> list[dict]:
     mroi_data = results.get("marginal_roi", {})
     spend_data = results.get("metadata", {}).get("total_spend", {})
     roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
+    metric_name = "ROI" if roi_is_monetary else "KPI efficiency"
+    metric_unit = "x" if roi_is_monetary else " KPI/currency"
 
     if not roi_data:
         return insights
@@ -326,7 +332,7 @@ def generate_insights(results: dict) -> list[dict]:
                 insights.append({
                     "type": "info",
                     "title": f"{ch.title()} is showing saturation",
-                    "detail": f"Marginal ROI ({mroi:.2f}x) is much lower than average ROI ({avg_roi:.2f}x).",
+                    "detail": f"Marginal {metric_name} ({mroi:.2f}{metric_unit}) is much lower than average {metric_name} ({avg_roi:.2f}{metric_unit}).",
                     "action": "You may be over-investing in this channel."
                 })
 
@@ -334,11 +340,11 @@ def generate_insights(results: dict) -> list[dict]:
     if mroi_data and spend_data:
         for ch, mroi in mroi_data.items():
             avg_roi = roi_data.get(ch, {}).get("mean", 0)
-            if mroi > avg_roi * 1.2 and avg_roi > 0.5:
+            if mroi > avg_roi * 1.2 and avg_roi > 0:
                 insights.append({
                     "type": "opportunity",
                     "title": f"{ch.title()} has room to scale",
-                    "detail": f"Marginal ROI ({mroi:.2f}x) exceeds average ROI ({avg_roi:.2f}x).",
+                    "detail": f"Marginal {metric_name} ({mroi:.2f}{metric_unit}) exceeds average {metric_name} ({avg_roi:.2f}{metric_unit}).",
                     "action": "Additional spend on this channel would likely be efficient."
                 })
 
@@ -381,6 +387,29 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
     metadata = results.get("metadata", {})
     insights = generate_insights(results)
     charts = results.get("charts", {})
+    manifest = results.get("run_manifest", {})
+    technical_status = manifest.get("status", "unknown")
+    quality_status = manifest.get("quality_status", "unknown")
+    if technical_status == "failed":
+        status_class = "status-error"
+        status_title = "Run incomplete — do not use for decisions"
+        status_detail = "One or more required result sections failed or are missing."
+    elif quality_status == "failed":
+        status_class = "status-error"
+        status_title = "Model quality failed — do not use for decisions"
+        status_detail = "Review convergence and ModelReviewer findings, then refit the model."
+    elif technical_status == "degraded":
+        status_class = "status-warning"
+        status_title = "Run completed with missing optional outputs"
+        status_detail = "Core results are present, but review the extraction errors before use."
+    elif technical_status == "complete" and quality_status == "passed":
+        status_class = "status-success"
+        status_title = "Run complete and model quality checks passed"
+        status_detail = "Use the uncertainty intervals and business context when making decisions."
+    else:
+        status_class = "status-warning"
+        status_title = "Run quality state unavailable"
+        status_detail = "This may be a legacy result; verify diagnostics before using it."
 
     # Use native PNG charts if available, fall back to SVG generation
     roi_chart = _embed_png_chart(charts.get("roi_bar_chart")) or generate_roi_chart_svg(results)
@@ -420,6 +449,7 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
     roi_rows = ""
     roi_data = results.get("roi", {})
     roi_is_monetary = metadata.get("roi_is_monetary", False)
+    roi_unit = "x" if roi_is_monetary else " KPI/currency"
     roi_heading = "Return on Investment by Channel" if roi_is_monetary else "KPI Efficiency by Channel"
     roi_explainer = (
         "ROI tells you how much incremental value you get back for every dollar spent. "
@@ -428,13 +458,22 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
         else "Revenue data was not supplied, so this metric is incremental KPI units per "
         "currency unit spent. A value below 1.0 is not evidence that a channel loses money."
     )
+    marginal_heading = "Marginal ROI Analysis" if roi_is_monetary else "Marginal KPI Efficiency"
+    marginal_explainer_title = (
+        "What is Marginal ROI?" if roi_is_monetary else "What is marginal KPI efficiency?"
+    )
+    marginal_explainer = (
+        "Marginal ROI is the return you'd get from spending the next dollar."
+        if roi_is_monetary
+        else "Marginal KPI efficiency estimates the incremental KPI units from the next currency unit spent."
+    )
     for ch, data in sorted(roi_data.items(), key=lambda x: -x[1].get("mean", 0)):
         roi = data.get("mean", 0)
         interpretation = interpret_roi(roi, roi_is_monetary)
         roi_rows += f'''
         <tr>
             <td><strong>{escape(str(ch).title())}</strong></td>
-            <td>{roi:.2f}x</td>
+            <td>{roi:.2f}{roi_unit}</td>
             <td>{interpretation}</td>
         </tr>
         '''
@@ -477,6 +516,16 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
             font-size: 14px;
             margin-bottom: 32px;
         }}
+        .status-banner {{
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            border-radius: 8px;
+            border-left: 4px solid;
+        }}
+        .status-banner strong {{ display: block; margin-bottom: 4px; }}
+        .status-error {{ background: #fef2f2; border-color: #dc2626; color: #7f1d1d; }}
+        .status-warning {{ background: #fffbeb; border-color: #d97706; color: #78350f; }}
+        .status-success {{ background: #f0fdf4; border-color: #16a34a; color: #14532d; }}
         h2 {{
             font-size: 20px;
             font-weight: 600;
@@ -581,6 +630,10 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
     <div class="container">
         <h1>Marketing Mix Model Report</h1>
         <p class="subtitle">Generated on {results.get("timestamp", "Unknown")[:10]} • {metadata.get("n_time_periods", 0)} time periods • {metadata.get("n_geos", 0)} regions</p>
+        <div class="status-banner {status_class}">
+            <strong>{status_title}</strong>
+            {status_detail}
+        </div>
 
         <div class="summary-grid">
             <div class="summary-card">
@@ -616,7 +669,7 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
             <thead>
                 <tr>
                     <th>Channel</th>
-                    <th>ROI</th>
+                    <th>{"ROI" if roi_is_monetary else "KPI / currency"}</th>
                     <th>Interpretation</th>
                 </tr>
             </thead>
@@ -625,19 +678,19 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
             </tbody>
         </table>
 
-        <h2>Contribution to Conversions</h2>
+        <h2>Contribution to KPI</h2>
         <div class="explainer">
             <div class="explainer-title">What does this show?</div>
-            This shows what percentage of your total conversions can be attributed to each marketing channel. It answers "where are my conversions coming from?"
+            This shows what percentage of your modeled KPI can be attributed to each marketing channel.
         </div>
         <div class="chart-container">
             {contrib_chart}
         </div>
 
-        <h2>Marginal ROI Analysis</h2>
+        <h2>{marginal_heading}</h2>
         <div class="explainer">
-            <div class="explainer-title">What is Marginal ROI?</div>
-            Marginal ROI is the return you'd get from spending the <em>next</em> dollar. If marginal ROI is lower than average ROI, you're hitting diminishing returns (saturation). If it's higher, there's room to scale.
+            <div class="explainer-title">{marginal_explainer_title}</div>
+            {marginal_explainer} If the marginal value is lower than the average, the channel is showing diminishing returns (saturation). If it is higher, there may be room to scale.
         </div>
         <div class="chart-container">
             {mroi_chart}

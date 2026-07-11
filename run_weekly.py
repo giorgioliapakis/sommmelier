@@ -19,6 +19,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from mmm.result_manifest import decision_readiness as evaluate_decision_readiness
+
 
 def run_command(
     cmd: list[str], description: str, timeout_seconds: int = 7200
@@ -54,6 +56,11 @@ def find_latest_results(exclude: set[Path] | None = None) -> Path | None:
     if results:
         return max(results, key=lambda f: f.stat().st_mtime)
     return None
+
+
+def decision_readiness(results_file: Path) -> tuple[bool, str]:
+    """Return whether a result is safe to pass into recommendation generation."""
+    return evaluate_decision_readiness(json.loads(results_file.read_text()))
 
 
 def main():
@@ -161,6 +168,9 @@ def main():
 
     results["results_file"] = str(results_file)
     print(f"\nResults saved to: {results_file}")
+    decision_ready, readiness_reason = decision_readiness(results_file)
+    results["decision_ready"] = decision_ready
+    results["readiness_reason"] = readiness_reason
 
     # Step 4: Generate HTML report (via CLI)
     success, output = run_command(
@@ -174,12 +184,22 @@ def main():
         results["report_file"] = str(report_file)
         print(f"Report saved to: {report_file}")
 
-    # Step 5: Run analysis and recommendations (via CLI)
-    success, output = run_command(
-        [sys.executable, "-m", "mmm.cli.main", "analyze", str(results_file)],
-        "Analyzing results and generating recommendations"
-    )
-    results["steps"]["analysis"] = {"success": success, "output": output}
+    # Step 5: Generate recommendations only for a technically complete model
+    # whose quality checks passed.
+    if decision_ready:
+        success, output = run_command(
+            [sys.executable, "-m", "mmm.cli.main", "analyze", str(results_file)],
+            "Analyzing results and generating recommendations",
+        )
+        results["steps"]["analysis"] = {"success": success, "output": output}
+    else:
+        print("\nRECOMMENDATIONS SKIPPED - result is not decision-ready")
+        print(f"Reason: {readiness_reason}")
+        results["steps"]["analysis"] = {
+            "success": False,
+            "skipped": True,
+            "reason": readiness_reason,
+        }
 
     analysis_file = results_file.with_name(
         results_file.stem.replace("full_results", "analysis") + ".md"
@@ -214,6 +234,7 @@ def main():
     print(f"  Quality Report: {results.get('quality_report_file', 'N/A')}")
 
     # Save run metadata
+    results["completed"] = datetime.now().isoformat()
     run_log = Path("outputs") / f"run_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     run_log.write_text(json.dumps(results, indent=2))
     print(f"  Run Log:        {run_log}")
@@ -221,13 +242,19 @@ def main():
     print("\n" + "-" * 60)
     print("NEXT STEPS FOR CLAUDE:")
     print("-" * 60)
-    print("1. Read the analysis file for recommendations")
-    print("2. Review the HTML report for visualizations")
-    print("3. Make strategic recommendations based on findings")
+    if decision_ready:
+        print("1. Read the analysis file for recommendations")
+        print("2. Review the HTML report for visualizations")
+        print("3. Make strategic recommendations based on findings")
+    else:
+        print("1. Review the HTML report's model-quality warning")
+        print("2. Resolve convergence or extraction failures before acting")
+        print("3. Refit the model; do not make strategic recommendations yet")
     print("4. Suggest model improvements if needed")
     print("-" * 60)
 
-    results["completed"] = datetime.now().isoformat()
+    if not decision_ready:
+        raise SystemExit(2)
     return results
 
 

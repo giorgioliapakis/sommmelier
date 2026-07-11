@@ -93,3 +93,9 @@ def test_time_column_is_accepted_as_documented(meridian_data_path: Path):
 
     assert dataset.config.date_column == "time"
     assert dataset.n_time_periods >= 52
+
+
+def test_revenue_kpi_sets_revenue_model_type(sample_data_path: Path):
+    dataset = load_mmm_data(sample_data_path, DataConfig(kpi_column="revenue"))
+
+    assert dataset.config.kpi_type == "revenue"

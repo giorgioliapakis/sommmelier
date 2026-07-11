@@ -25,8 +25,12 @@ def _valid_rows() -> list[dict]:
                     "geo": geo,
                     "conversions": 100 + week * 10 + geo_index * 20,
                     "meta_spend": 1000 + week,
+                    "meta_impressions": 100_000 + week,
                     "google_spend": 800 + geo_index,
+                    "google_impressions": 80_000 + geo_index,
                     "tiktok_spend": 400 + week,
+                    "tiktok_impressions": 40_000 + week,
+                    "population": 26_000_000 if geo == "AU" else 330_000_000,
                 }
             )
     return rows
@@ -116,3 +120,42 @@ def test_negative_revenue_fails(tmp_path: Path):
     )
     assert not report.passed
     assert not nonnegative_check.passed
+
+
+def test_missing_population_fails_without_explicit_fallback(tmp_path: Path):
+    rows = _valid_rows()
+    for row in rows:
+        row.pop("population")
+
+    report = validate_dataset(load_mmm_data(_write_dataset(tmp_path, rows)))
+
+    population_check = next(r for r in report.results if r.check_name == "Population Data")
+    assert not report.passed
+    assert not population_check.passed
+
+
+def test_irregular_but_gap_free_dates_fail_weekly_cadence(tmp_path: Path):
+    rows = _valid_rows()
+    shifted_date = pd.Timestamp(rows[2]["date"]) + pd.Timedelta(days=1)
+    rows[2]["date"] = shifted_date
+    rows[3]["date"] = shifted_date
+
+    report = validate_dataset(load_mmm_data(_write_dataset(tmp_path, rows)))
+
+    cadence_check = next(r for r in report.results if r.check_name == "Weekly Cadence")
+    assert not report.passed
+    assert not cadence_check.passed
+
+
+def test_missing_media_execution_fails_without_explicit_estimate(tmp_path: Path):
+    rows = _valid_rows()
+    for row in rows:
+        row.pop("meta_impressions")
+
+    report = validate_dataset(load_mmm_data(_write_dataset(tmp_path, rows)))
+
+    execution_check = next(
+        r for r in report.results if r.check_name == "Media Execution Data"
+    )
+    assert not report.passed
+    assert not execution_check.passed

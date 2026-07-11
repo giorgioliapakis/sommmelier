@@ -6,7 +6,7 @@ Audit date: 2026-07-11
 
 Sommmelier has a compelling product shape: local data checks, GPU fitting, model diagnostics, reporting, recommendations, calibration, and longitudinal quality tracking are all present. The project is still alpha-quality, however. Before this audit, several paths could produce confident-looking but incorrect output: an asynchronous weekly run could select an old result, non-monetary KPI efficiency could be described as profit, malformed panel data could reach paid GPU fitting, and calibration parameters mixed linear and log scales.
 
-This update fixes those highest-risk issues and raises measured line coverage from 8% to 41%. The project is safer to experiment with, but it should not yet be treated as an unattended production decision system.
+This work fixes those highest-risk issues and raises measured line coverage from 8% to 52%. The project is substantially safer to experiment with, but still needs more real-data coverage before it should be treated as an unattended production decision system.
 
 ## What was fixed
 
@@ -19,9 +19,15 @@ This update fixes those highest-risk issues and raises measured line coverage fr
 | Column detection | The loader, Modal runner, and tests each implemented different rules; tests exercised copied test logic | A production detector now handles paid, R&F, organic, treatment, and documented control columns case-insensitively; tests import it directly |
 | Controls | `is_holiday` and `product_launch` were documented as automatic but ignored by the local and GPU paths | Both are now included in shared detection |
 | Calibration | Platform-derived values in linear space were averaged with LogNormal location parameters in log space | All prior locations are now combined in log space; lift-only experiments are no longer treated as ROI |
+| Calibration units | Monetary ROI and KPI-per-currency records could be mixed or applied to the wrong outcome | Every record declares its metric; mixed or incompatible calibration is rejected before GPU spend |
 | Budget advice | The recommendation layer invented an allocation proportional to marginal ROI | It now uses only Meridian's fitted same-budget optimizer result and returns no allocation when none exists |
 | HTML reporting | Channel names were inserted into HTML/SVG without escaping | Dynamic report text is escaped and covered by a regression test |
 | Native charts | Remote chart keys did not match report keys, remote paths were not downloaded, and `--report` did not generate a report | Chart keys are aligned, Volume charts are downloaded locally, and `--report` calls the generator |
+| Run state | Partial extraction and failed convergence could still flow into strategic recommendations | Results carry independent technical and quality status; reports show a prominent warning and recommendation generation is blocked unless both pass |
+| Runtime divergence | A second Modal runner remained pinned to Meridian 1.4 with a different schema | `modal_mmm.py` is now a thin compatibility alias; release-sensitive extraction is shared and tested |
+| Model persistence | Raw pickle deserialization could execute code from an untrusted file | Model bundles now use Meridian protobuf, Parquet, and JSON with an atomic directory write |
+| Time and population | Irregular dates and a silent 10-million-person fallback could change model scaling | Exact seven-day cadence and population data are required; coarse estimates require an explicit flag |
+| Media execution | Missing impressions silently became spend multiplied by 100, imposing a fabricated $10 CPM | Impressions or reach/frequency are required; the coarse estimate is available only through an explicit flag |
 | Quality history | Corrupt JSON was silently replaced by an empty history; writes were non-atomic | Corruption is reported and history is replaced atomically |
 | CLI contract | `sommmelier validate` printed `FAILED` but exited with status 0 | Invalid data now returns status 1, making scripts and CI reliable |
 | Packaging | The classifier said Apache while the project and `LICENSE` say MIT | Metadata now consistently says MIT |
@@ -33,38 +39,36 @@ This update fixes those highest-risk issues and raises measured line coverage fr
 
 1. **Keep Meridian compatibility tested.** The GPU image and package constraints now target Meridian 1.6.2. Every dependency bump should be followed by a real T4 smoke run and result-schema comparison because analyzer, visualizer, optimizer, and diagnostics objects are version-sensitive. See the [official Meridian changelog](https://github.com/google/meridian/blob/main/CHANGELOG.md).
 
-2. **Finish consolidating the modeling paths.** Release-sensitive diagnostics, review, chart, and optimizer adapters are now shared, and the local optimizer uses the current Meridian contract. `modal_mmm.py` remains a divergent legacy runner and result extraction should move fully out of `modal_mmm_full.py`, leaving Modal as a thin compute adapter.
+2. **Finish extracting the Modal implementation into package modules.** The divergent legacy runner is retired and release-sensitive tensor, diagnostics, review, chart, and optimizer adapters are shared. Input construction and several optional result sections still live in `modal_mmm_full.py`; move them into testable package modules until Modal is only a compute adapter.
 
 3. **Automate the paid GPU boundary.** Manual T4 smoke tests now verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. Add a manually triggered, budget-capped GitHub workflow using the included sample; keep it out of ordinary pull requests to avoid surprise spend.
 
-4. **Make calibration units explicit.** Experiment and platform conversion records are KPI-based, while user `PriorBelief` values are described as ROI. Add an explicit metric/unit field (`monetary_roi`, `incremental_kpi_per_currency`, or `cpik`) and reject calibration that does not match the fitted outcome scale.
-
-5. **Stop swallowing extraction failures.** The full runner catches broad exceptions around most result sections and can publish a partial JSON file without a machine-readable degraded status. Add a result manifest with required/optional sections and fail when required outputs such as fit, convergence, or primary channel effects are absent.
+4. **Exercise more live model shapes.** The current paid smoke covers the geo-level spend-and-impressions sample. Add budget-capped R&F, organic, treatment, holdout, calibration, national-model, and expected-failure fixtures so those branches cannot drift silently.
 
 ### P2 — next hardening pass
 
-1. Raise coverage around `mmm/model/builder.py`, the recommendation/advisor modules, CLI commands, calibration serialization, and trend reporting. Overall coverage is now 41%, but the model builder is only 6% because Meridian is not installed in the local test environment.
-2. Replace pickle-based model persistence with Meridian's supported `save_mmm` and `load_mmm` APIs, and continue to reject untrusted model files because the underlying format is not a safe interchange format.
-3. Add structured logging and run IDs across local and remote stages. The current print-based logs are hard to correlate and partial failures are difficult to query.
-4. Validate weekly cadence explicitly, not just gaps larger than two weeks. Irregular but gap-free dates can still violate the model's intended weekly granularity.
-5. Make population fallback opt-in. Assigning every unknown geography a population of 10 million can materially change geo scaling while looking valid.
-6. Finish the configured quality gates. Repository-wide semantic Ruff checks now pass and run in CI, but 181 pre-existing line-length violations remain excluded and strict mypy still reports 97 errors.
+1. Raise coverage around the recommendation/advisor modules, CLI commands, report generator, and trend reporting. Overall coverage is now 52%; the model builder improved from 6% to 57% in this pass.
+2. Add structured logging around the new run ID across local and remote stages. The manifest is queryable, but print-based events are still hard to correlate in external logging systems.
+3. Finish the configured quality gates. Repository-wide semantic Ruff checks pass and run in CI, but 181 pre-existing line-length violations remain excluded and strict mypy still has a substantial baseline.
+4. Add model-bundle compatibility tests against a small genuinely fitted Meridian artifact, not only the isolated serializer contract.
 
 ## Verification performed
 
-- `python3 -m pytest -q`: 49 passed
-- `python3 -m pytest -q --cov=mmm --cov-report=term-missing`: 41% total coverage
+- `uv run --frozen pytest -q`: 82 passed
+- `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 52% total coverage
 - Repository-wide Ruff semantic checks: passed (line-length is temporarily excluded because 181 pre-existing violations remain)
 - `python3 -m compileall`: passed
 - `git diff --check`: passed
 - CLI failure contract tested through Typer's runner
 - Live Meridian 1.6.2 T4 smoke: 10 distinct valid PNG charts, 3 populated optimizer scenarios, structured six-check ModelReviewer output, correct non-convergence status, local JSON, and HTML report
+- Follow-up manifest smoke: technical status `complete`, quality status `failed` for the deliberately under-sampled fit, visible HTML warning, and CLI recommendation blocking
+- Calibration mismatch preflight: rejected incompatible units before the remote GPU function was invoked
 - Locked dependency graph generated with uv; CI covers Python 3.11 and 3.12, tests, semantic Ruff, package build, and CLI startup
 
 ## Recommended build sequence
 
-1. Land the Meridian 1.6.2 compatibility adapters, lockfile, and CI.
-2. Retire the legacy Modal runner and consolidate model preparation and extraction behind one result schema.
-3. Build a run manifest with explicit failed/degraded/complete states.
-4. Make calibration units explicit and reject priors incompatible with the modeled outcome.
-5. Replace raw model persistence, tighten cadence/population safety, and continue the lint/type/coverage cleanup.
+1. Land the unified runtime, manifest, calibration-unit, persistence, and input-safety work.
+2. Move the remaining Modal input/result logic into package modules with isolated contract tests.
+3. Add manually dispatched paid fixtures for the remaining model shapes.
+4. Add structured logging and continue the type, line-length, and coverage cleanup.
+5. Build the next product layer only after decision-readiness gates hold across real customer-shaped data.

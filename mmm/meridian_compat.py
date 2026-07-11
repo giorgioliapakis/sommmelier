@@ -5,6 +5,78 @@ from pathlib import Path
 from typing import Any
 
 
+def summarize_channel_tensor(tensor: Any, channels: list[str]) -> dict[str, dict[str, float]]:
+    """Summarize a Meridian posterior tensor across chain and draw dimensions."""
+    import numpy as np
+
+    values = np.asarray(tensor.numpy() if hasattr(tensor, "numpy") else tensor)
+    if values.ndim < 3 or values.shape[-1] != len(channels):
+        raise ValueError(
+            "Expected a posterior tensor ending in one value per channel; "
+            f"got shape {values.shape} for {len(channels)} channels"
+        )
+
+    return {
+        channel: {
+            "mean": float(values[..., index].mean()),
+            "std": float(values[..., index].std()),
+            "ci_lower": float(np.percentile(values[..., index], 5)),
+            "ci_upper": float(np.percentile(values[..., index], 95)),
+        }
+        for index, channel in enumerate(channels)
+    }
+
+
+def extract_channel_contributions(tensor: Any, channels: list[str]) -> dict[str, dict[str, float]]:
+    """Aggregate incremental outcome and normalize channel contributions."""
+    import numpy as np
+
+    values = np.asarray(tensor.numpy() if hasattr(tensor, "numpy") else tensor)
+    if values.ndim < 3 or values.shape[-1] != len(channels):
+        raise ValueError(
+            "Expected incremental outcome ending in one value per channel; "
+            f"got shape {values.shape} for {len(channels)} channels"
+        )
+
+    posterior_mean = values.mean(axis=(0, 1))
+    if posterior_mean.ndim > 1:
+        channel_totals = posterior_mean.sum(axis=tuple(range(posterior_mean.ndim - 1)))
+    else:
+        channel_totals = posterior_mean
+    total = float(channel_totals.sum())
+
+    return {
+        channel: {
+            "absolute": float(channel_totals[index]),
+            "percentage": float(channel_totals[index] / total * 100) if total > 0 else 0.0,
+        }
+        for index, channel in enumerate(channels)
+    }
+
+
+def extract_predictive_accuracy(dataset: Any) -> dict[str, float]:
+    """Normalize Meridian's predictive-accuracy xarray dataset."""
+    import numpy as np
+
+    if dataset is None or "metric" not in dataset.coords or "value" not in dataset.data_vars:
+        return {}
+
+    aliases = {
+        "rsquared": "r_squared",
+        "mape": "mape",
+        "wmape": "wmape",
+    }
+    metrics: dict[str, float] = {}
+    for raw_name in dataset.coords["metric"].values:
+        normalized = str(raw_name).lower().replace("_", "")
+        output_name = aliases.get(normalized)
+        if output_name is None:
+            continue
+        values = np.asarray(dataset.sel(metric=raw_name)["value"].values, dtype=float)
+        metrics[output_name] = float(values.mean())
+    return metrics
+
+
 def extract_rhat_diagnostics(rhat_summary: Any, threshold: float = 1.1) -> dict[str, Any]:
     """Normalize Meridian's R-hat summary without assuming one release's columns."""
     if rhat_summary is None or len(rhat_summary) == 0:
