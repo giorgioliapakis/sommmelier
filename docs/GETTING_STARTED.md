@@ -60,6 +60,7 @@ date,geo,conversions,meta_spend,google_spend,tiktok_spend
 
 - `{channel}_impression` - Impressions (estimated from spend if missing)
 - `population` - Geographic population (uses defaults if missing)
+- `revenue`, `revenue_per_kpi`, or `revenue_per_conversion` - Enables monetary ROI
 - `{name}_control` - Control variables (seasonality, promotions, etc.)
 
 ### Data Requirements
@@ -90,6 +91,8 @@ After the run completes, check the `outputs/` folder:
 
 ### ROI Interpretation
 
+Use these profitability bands only when the results contain `metadata.roi_is_monetary: true`. Otherwise, the reported metric is incremental KPI units per currency unit spent, and CPIK should be used for efficiency decisions.
+
 | ROI | Meaning |
 |-----|---------|
 | > 2.0x | Excellent - scale this channel |
@@ -112,7 +115,7 @@ For ongoing use:
 1. **Update your data CSV** with the latest week
 2. **Run the pipeline**: `python run_weekly.py data/raw/your_data.csv`
 3. **Review the HTML report** and recommendations
-4. **Check quality trends** via `python check_quality.py`
+4. **Check quality trends** via `sommmelier quality --history`
 
 ## Troubleshooting
 
@@ -130,7 +133,7 @@ Re-run `modal setup` to refresh credentials.
 
 ### "Insufficient time periods" warning
 
-You need at least 26 weeks of data. The model will still run but confidence intervals will be wide.
+You need at least 26 weeks of data. Validation stops before a paid GPU run because shorter histories are not reliable enough for this workflow.
 
 ### High MAPE or low R-squared
 

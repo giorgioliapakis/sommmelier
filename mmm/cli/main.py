@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -52,6 +52,19 @@ def validate(
         report = validate_dataset(dataset)
         console.print(report.summary())
 
+        from mmm.data.validator import check_meridian_compatibility
+
+        compatibility_issues = check_meridian_compatibility(dataset)
+        if compatibility_issues:
+            console.print("\n[red]Meridian compatibility issues:[/red]")
+            for issue in compatibility_issues:
+                console.print(f"- {issue}")
+
+        if not report.passed or compatibility_issues:
+            raise typer.Exit(1)
+
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
@@ -66,18 +79,22 @@ def run(
     n_keep: Annotated[int, typer.Option(help="Samples to keep per chain")] = 500,
 ):
     """Run the MMM model on a dataset (local, no GPU)."""
-    from mmm.data import load_mmm_data
+    from mmm.analysis.reports import generate_report
+    from mmm.data import load_mmm_data, validate_dataset
     from mmm.data.schema import DataConfig
     from mmm.model import AutoMMM, ModelConfig
-    from mmm.analysis.reports import generate_report
 
-    console.print(f"\n[bold]Running Sommmelier[/bold]\n")
+    console.print("\n[bold]Running Sommmelier[/bold]\n")
     console.print(f"Data: {data_path}")
     console.print(f"Output: {output_dir}\n")
 
     with console.status("Loading data..."):
         config = DataConfig(kpi_column=kpi_column)
         dataset = load_mmm_data(data_path, config)
+        validation = validate_dataset(dataset)
+        if not validation.passed:
+            console.print(validation.summary())
+            raise typer.Exit(1)
         console.print(f"[green]✓[/green] Loaded {dataset.n_time_periods} time periods, {dataset.n_geos} geos")
 
     model_config = ModelConfig(
@@ -102,17 +119,17 @@ def run(
     mmm.save(output_dir / "model.pkl")
     console.print(f"\n[green]✓[/green] Model saved to {output_dir / 'model.pkl'}")
 
-    report = generate_report(mmm, output_dir / "report.md")
+    generate_report(mmm, output_dir / "report.md")
     console.print(f"[green]✓[/green] Report saved to {output_dir / 'report.md'}")
 
 
 @app.command()
 def analyze(
-    results_path: Annotated[Optional[Path], typer.Argument(help="Path to results JSON (uses latest if not specified)")] = None,
+    results_path: Annotated[Path | None, typer.Argument(help="Path to results JSON (uses latest if not specified)")] = None,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Analyze MMM results and generate recommendations."""
-    from mmm.recommendations import generate_analysis, format_report_for_claude
+    from mmm.recommendations import format_report_for_claude, generate_analysis
 
     if results_path is None:
         results_path = find_latest_results()
@@ -207,12 +224,12 @@ def quality(
 @app.command()
 def optimize(
     model_path: Annotated[Path, typer.Argument(help="Path to saved model")],
-    budget: Annotated[Optional[float], typer.Option(help="Total budget to optimize")] = None,
+    budget: Annotated[float | None, typer.Option(help="Total budget to optimize")] = None,
 ):
     """Run budget optimization on a fitted model."""
     from mmm.model import AutoMMM
 
-    console.print(f"\n[bold]Budget Optimization[/bold]\n")
+    console.print("\n[bold]Budget Optimization[/bold]\n")
 
     with console.status("Loading model..."):
         mmm = AutoMMM.load(model_path)
@@ -260,8 +277,8 @@ def insights(
     model_path: Annotated[Path, typer.Argument(help="Path to saved model")],
 ):
     """Generate insights from a fitted model."""
-    from mmm.model import AutoMMM
     from mmm.analysis import generate_insights
+    from mmm.model import AutoMMM
 
     with console.status("Loading model..."):
         mmm = AutoMMM.load(model_path)

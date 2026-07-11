@@ -84,6 +84,7 @@ Read the best results JSON. Key fields to examine:
 - `contributions` -- Channel contribution to KPI
 - `model_fit` -- R-squared, MAPE, convergence
 - `metadata.config` -- What parameters produced these results
+- `metadata.roi_is_monetary` -- Whether ROI can be interpreted as a monetary return
 - `model_review` -- Diagnostic check results
 - `optimal_frequency` -- For R&F channels
 - `organic_contributions` -- For organic media channels
@@ -209,6 +210,7 @@ After analysis, tell the user:
 ## Interpretation Guide
 
 **ROI Thresholds:**
+- Apply profitability thresholds only when `metadata.roi_is_monetary` is true. Otherwise, describe the value as KPI efficiency and use CPIK for decisions.
 - > 1.5x: Strong - consider scaling
 - 1.0-1.5x: Good - maintain
 - 0.5-1.0x: Weak - optimize

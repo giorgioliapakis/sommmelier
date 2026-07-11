@@ -65,10 +65,10 @@ Explain:
 
 ## Step 4: Validate the Data
 
-Run validation:
+The small file above is useful for learning the column format but is intentionally too short to fit. Validate the full bundled Meridian sample for the modeling steps:
 
 ```bash
-python -m mmm.cli.main validate data/examples/sample_data.csv
+python -m mmm.cli.main validate data/examples/meridian_sample.csv
 ```
 
 Walk through each validation check:
@@ -87,7 +87,7 @@ Ask the user: "Ready to run the model? This will fit a Bayesian MMM on a Modal G
 
 If they confirm:
 ```bash
-python run_weekly.py data/examples/sample_data.csv
+python run_weekly.py data/examples/meridian_sample.csv
 ```
 
 While waiting, explain what's happening:
@@ -107,7 +107,7 @@ After the model completes (or using existing results), read the results JSON and
 
 ### ROI by Channel
 - "These numbers tell you how much revenue (or conversions) each dollar of ad spend generates"
-- "ROI > 1.0 means profitable. The 90% confidence interval shows how certain the model is"
+- "ROI > 1.0 means profitable only when revenue data made the ROI monetary. Otherwise, use CPIK and describe the value as KPI efficiency. The 90% confidence interval shows how certain the model is"
 - Explain what the specific numbers mean for the example data
 
 ### Marginal ROI

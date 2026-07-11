@@ -20,6 +20,7 @@ mmm_image = (
     .pip_install(
         "jax[cuda12]",
     )
+    .add_local_python_source("mmm", copy=True)
 )
 
 app = modal.App("sommmelier-full")
@@ -58,8 +59,10 @@ def fit_mmm_full(
     import warnings
     from datetime import datetime
 
-    import pandas as pd
     import numpy as np
+    import pandas as pd
+
+    from mmm.detection import detect_columns
 
     # Monkey-patch numpy 2.x compatibility for TFP
     _original_reshape = np.reshape
@@ -90,7 +93,7 @@ def fit_mmm_full(
     print(f"Loaded data: {len(df)} rows, {df['geo'].nunique()} geos, {df['time'].nunique()} periods")
 
     # ─── Auto-detect channels and variable types from column names ───
-    spend_cols_all = [col for col in df.columns if '_spend' in col.lower()]
+    detected = detect_columns(df.columns)
 
     # Separate channels into spend+impressions vs reach+frequency
     si_channels = []       # spend+impressions channel names
@@ -101,12 +104,13 @@ def fit_mmm_full(
     rf_frequency_cols = []
     rf_spend_cols = []
 
-    for spend_col in spend_cols_all:
-        ch = spend_col.replace('_spend', '').replace('_Spend', '')
-
-        # Check for reach+frequency columns
-        reach_col = next((c for c in df.columns if c.lower() == f"{ch.lower()}_reach"), None)
-        freq_col = next((c for c in df.columns if c.lower() == f"{ch.lower()}_frequency"), None)
+    spend_cols_by_channel = {}
+    for channel in detected.media_channels:
+        ch = channel["name"]
+        spend_col = channel["spend_column"]
+        reach_col = channel["reach_column"]
+        freq_col = channel["frequency_column"]
+        spend_cols_by_channel[ch] = spend_col
 
         if reach_col and freq_col:
             # R&F channel
@@ -127,15 +131,7 @@ def fit_mmm_full(
             si_channels.append(ch)
             si_spend_cols.append(spend_col)
 
-            # Find matching impression column
-            imp_col = None
-            for suffix in ["_impressions", "_impression"]:
-                for prefix in [ch, ch.lower()]:
-                    if f"{prefix}{suffix}" in df.columns:
-                        imp_col = f"{prefix}{suffix}"
-                        break
-                if imp_col:
-                    break
+            imp_col = channel["impressions_column"]
 
             if imp_col is None:
                 imp_col = f"{ch}_impression"
@@ -146,35 +142,94 @@ def fit_mmm_full(
 
     # All paid media channels (spend+impressions + R&F) — used for priors, ROI, etc.
     channels = si_channels + rf_channels
+    if not channels:
+        raise ValueError("No paid media columns ending in '_spend' were found")
+
+    duplicate_rows = int(df.duplicated(['geo', 'time']).sum())
+    if duplicate_rows:
+        raise ValueError(f"Found {duplicate_rows} duplicate geo/time rows")
+    expected_rows = int(df['geo'].nunique() * df['time'].nunique())
+    if len(df) != expected_rows:
+        raise ValueError(
+            f"Geo/time panel is incomplete: expected {expected_rows} rows, found {len(df)}"
+        )
+    numeric_columns = [kpi_column, *spend_cols_by_channel.values()]
+    if df[numeric_columns].isna().any().any():
+        raise ValueError("KPI and spend columns cannot contain missing values")
+    if not np.isfinite(df[numeric_columns].to_numpy()).all():
+        raise ValueError("KPI and spend columns must contain only finite numeric values")
+    if (df[numeric_columns] < 0).any().any():
+        raise ValueError("KPI and spend columns cannot contain negative values")
+    zero_spend_channels = [
+        ch for ch, column in spend_cols_by_channel.items() if df[column].sum() <= 0
+    ]
+    if zero_spend_channels:
+        raise ValueError(f"Channels with zero total spend: {', '.join(zero_spend_channels)}")
 
     # Detect organic media columns (suffix: _organic)
-    organic_cols = [col for col in df.columns if col.lower().endswith('_organic')]
+    organic_cols = list(detected.organic_columns)
     organic_channels = [col.rsplit('_organic', 1)[0] for col in organic_cols]
     if organic_channels:
         print(f"Organic media: {organic_channels}")
 
     # Detect non-media treatment columns (suffix: _treatment)
-    treatment_cols = [col for col in df.columns if col.lower().endswith('_treatment')]
+    treatment_cols = list(detected.treatment_columns)
     treatment_names = [col.rsplit('_treatment', 1)[0] for col in treatment_cols]
     if treatment_names:
         print(f"Non-media treatments: {treatment_names}")
 
     # Detect control columns (suffix: _control, or common names like is_holiday)
-    control_cols = [col for col in df.columns if '_control' in col.lower()]
-    # Treatment columns take precedence over control columns
-    control_cols = [c for c in control_cols if c not in treatment_cols]
+    control_cols = list(detected.control_columns)
 
     if 'population' not in df.columns:
         pop_map = {'US': 330_000_000, 'UK': 67_000_000, 'AU': 26_000_000}
         df['population'] = df['geo'].map(lambda x: pop_map.get(x, 10_000_000))
+
+    auxiliary_columns = list(dict.fromkeys([
+        *si_impression_cols,
+        *rf_reach_cols,
+        *rf_frequency_cols,
+        *organic_cols,
+        *treatment_cols,
+        *control_cols,
+        'population',
+        *[column for column in ('revenue', 'revenue_per_kpi', 'revenue_per_conversion') if column in df.columns],
+    ]))
+    if df[auxiliary_columns].isna().any().any():
+        raise ValueError("Additional model inputs cannot contain missing values")
+    try:
+        auxiliary_values = df[auxiliary_columns].to_numpy(dtype=float)
+    except (TypeError, ValueError) as e:
+        raise ValueError("Additional model inputs must be numeric") from e
+    if not np.isfinite(auxiliary_values).all():
+        raise ValueError("Additional model inputs must contain only finite values")
+    nonnegative_columns = [
+        *si_impression_cols,
+        *rf_reach_cols,
+        *rf_frequency_cols,
+        *organic_cols,
+        'population',
+        *[column for column in ('revenue', 'revenue_per_kpi', 'revenue_per_conversion') if column in df.columns],
+    ]
+    if (df[list(dict.fromkeys(nonnegative_columns))] < 0).any().any():
+        raise ValueError("Media, population, organic, and revenue inputs cannot be negative")
 
     print(f"Paid media channels: {channels} ({len(si_channels)} spend+imp, {len(rf_channels)} R&F)")
 
     # ─── Build Meridian InputData ───
     from meridian.data import data_frame_input_data_builder
 
-    has_revenue = 'revenue_per_conversion' in df.columns or 'revenue' in df.columns
-    kpi_type = 'revenue' if has_revenue else 'non_revenue'
+    kpi_type = 'revenue' if kpi_column.lower() == 'revenue' else 'non_revenue'
+    revenue_per_kpi_col = next(
+        (column for column in ('revenue_per_kpi', 'revenue_per_conversion') if column in df.columns),
+        None,
+    )
+    if kpi_type == 'non_revenue' and revenue_per_kpi_col is None and 'revenue' in df.columns:
+        invalid_revenue_rows = (df[kpi_column] == 0) & (df['revenue'] != 0)
+        if invalid_revenue_rows.any():
+            raise ValueError("Revenue cannot be non-zero when KPI is zero")
+        revenue_per_kpi_col = '_revenue_per_kpi'
+        df[revenue_per_kpi_col] = df['revenue'].div(df[kpi_column].where(df[kpi_column] != 0)).fillna(0)
 
     builder = data_frame_input_data_builder.DataFrameInputDataBuilder(
         kpi_type=kpi_type,
@@ -183,8 +238,8 @@ def fit_mmm_full(
     builder = builder.with_kpi(df)
     builder = builder.with_population(df)
 
-    if 'revenue_per_conversion' in df.columns:
-        builder = builder.with_revenue_per_kpi(df, revenue_per_kpi_col='revenue_per_conversion')
+    if revenue_per_kpi_col:
+        builder = builder.with_revenue_per_kpi(df, revenue_per_kpi_col=revenue_per_kpi_col)
 
     # Add spend+impressions media channels
     if si_channels:
@@ -229,8 +284,8 @@ def fit_mmm_full(
     print("InputData built successfully")
 
     # Configure model
-    from meridian.model import model, spec, prior_distribution
     import tensorflow_probability as tfp
+    from meridian.model import model, prior_distribution, spec
 
     n_periods = df['time'].nunique()
 
@@ -280,14 +335,14 @@ def fit_mmm_full(
     # Infer adstock type per channel: upper-funnel channels get binomial,
     # direct response channels get geometric (the default).
     # User overrides take precedence over auto-detection.
-    UPPER_FUNNEL_KEYWORDS = {"youtube", "tv", "video", "brand_awareness", "awareness"}
+    upper_funnel_keywords = {"youtube", "tv", "video", "brand_awareness", "awareness"}
     adstock_decay_spec = {}
     for ch in channels:
         if adstock_overrides and ch in adstock_overrides:
             adstock_decay_spec[ch] = adstock_overrides[ch]
         else:
             ch_lower = ch.lower()
-            if any(kw in ch_lower for kw in UPPER_FUNNEL_KEYWORDS):
+            if any(kw in ch_lower for kw in upper_funnel_keywords):
                 adstock_decay_spec[ch] = "binomial"
             else:
                 adstock_decay_spec[ch] = "geometric"
@@ -305,8 +360,8 @@ def fit_mmm_full(
             print(f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)")
 
     # Determine knot strategy: AKS vs manual
-    USE_AKS_MIN_PERIODS = 26
-    use_aks = force_aks if force_aks is not None else (n_periods >= USE_AKS_MIN_PERIODS)
+    use_aks_min_periods = 26
+    use_aks = force_aks if force_aks is not None else (n_periods >= use_aks_min_periods)
 
     # Only include adstock_decay_spec if any channels are non-default (binomial)
     has_binomial = any(v == "binomial" for v in adstock_decay_spec.values())
@@ -360,8 +415,12 @@ def fit_mmm_full(
             "n_time_periods": n_periods,
             "n_geos": int(df['geo'].nunique()),
             "channels": channels,
-            "total_spend": {ch: float(df[f"{ch}_spend"].sum()) for ch in channels},
+            "total_spend": {
+                ch: float(df[spend_cols_by_channel[ch]].sum()) for ch in channels
+            },
             "total_kpi": float(df[kpi_column].sum()),
+            "kpi_type": kpi_type,
+            "roi_is_monetary": kpi_type == 'revenue' or revenue_per_kpi_col is not None,
             "config": {
                 "n_chains": n_chains,
                 "n_keep": n_keep,
@@ -840,7 +899,7 @@ def main(
                 # Import locally to avoid requiring mmm package on Modal worker
                 import sys
                 sys.path.insert(0, str(Path(__file__).parent))
-                from mmm.calibration import load_calibration, calculate_channel_priors
+                from mmm.calibration import calculate_channel_priors, load_calibration
 
                 cal_data = load_calibration(calibration_path)
                 calibration_priors = calculate_channel_priors(cal_data)
@@ -858,7 +917,7 @@ def main(
             try:
                 import sys
                 sys.path.insert(0, str(Path(__file__).parent))
-                from mmm.calibration import load_calibration, calculate_channel_priors
+                from mmm.calibration import calculate_channel_priors, load_calibration
 
                 cal_data = load_calibration(default_cal)
                 calibration_priors = calculate_channel_priors(cal_data)
@@ -921,14 +980,33 @@ def main(
     # Save results
     output_path = Path("outputs") / f"full_results_{results['timestamp'].replace(':', '-').replace('.', '-')}.json"
     output_path.parent.mkdir(exist_ok=True)
+
+    # Native chart paths point into the remote Modal Volume. Download them so
+    # the local HTML report can actually embed the charts it was promised.
+    local_chart_dir = output_path.parent / f"charts_{output_path.stem.removeprefix('full_results_')}"
+    downloaded_charts = {}
+    for chart_name, remote_path in results.get("charts", {}).items():
+        try:
+            volume_path = str(remote_path).removeprefix("/outputs/")
+            chart_bytes = b"".join(volume.read_file(volume_path))
+            local_chart_dir.mkdir(parents=True, exist_ok=True)
+            local_path = local_chart_dir / Path(remote_path).name
+            local_path.write_bytes(chart_bytes)
+            downloaded_charts[chart_name] = str(local_path)
+        except Exception as e:
+            print(f"Warning: Could not download chart {chart_name}: {e}")
+    results["charts"] = downloaded_charts
+
     output_path.write_text(json.dumps(results, indent=2, default=str))
     print(f"\nFull results saved to: {output_path}")
 
     # Generate HTML report if requested
     if report:
         print("\nGenerating HTML report...")
-        # Report generation will be handled by the reporting module
+        from mmm.analysis.visualize import generate_html_report
+
         report_path = output_path.with_suffix('.html')
+        generate_html_report(results, report_path)
         print(f"Report saved to: {report_path}")
 
     return results

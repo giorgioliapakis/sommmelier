@@ -102,6 +102,8 @@ A CSV with weekly marketing data. At minimum:
 | `conversions` | Yes | `1523` |
 | `{channel}_spend` | Yes | `meta_spend`, `google_spend` |
 
+To get monetary ROI, also provide either `revenue`, `revenue_per_kpi`, or `revenue_per_conversion`. Without one of those columns, Sommmelier reports incremental KPI units per currency unit spent; a value below 1.0 does not mean the channel is unprofitable.
+
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
 | Time periods | 26 weeks | 52+ weeks |
@@ -201,6 +203,7 @@ Channel ROI:
   meta   : 0.85x  (90% CI: 0.52 - 1.21)
   google : 1.42x  (90% CI: 0.89 - 2.05)
 ```
+- These profitability bands apply only when the result metadata says `roi_is_monetary: true`.
 - **> 1.5x**: Strong performer, consider scaling
 - **1.0 - 1.5x**: Profitable, maintain or test scaling
 - **< 1.0x**: Underperforming, needs investigation

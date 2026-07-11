@@ -4,9 +4,8 @@ Visualization module for Sommmelier.
 Generates charts and visualizations that laypeople can understand.
 """
 
-import json
+from html import escape
 from pathlib import Path
-from typing import Any
 
 
 def normalize_results(results: dict) -> dict:
@@ -44,6 +43,7 @@ def generate_roi_chart_svg(results: dict) -> str:
     """Generate an SVG bar chart showing ROI by channel."""
     results = normalize_results(results)
     roi_data = results.get("roi", {})
+    roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
     if not roi_data:
         return "<p>No ROI data available</p>"
 
@@ -63,6 +63,8 @@ def generate_roi_chart_svg(results: dict) -> str:
 
     # Color gradient (green for high ROI, orange for low)
     def get_color(roi: float) -> str:
+        if not roi_is_monetary:
+            return "#3b82f6"
         if roi >= 1.0:
             return "#22c55e"  # green
         elif roi >= 0.5:
@@ -83,7 +85,7 @@ def generate_roi_chart_svg(results: dict) -> str:
 
         svg_bars.append(f'''
         <g transform="translate(0, {y})">
-            <text x="{label_width - 10}" y="{bar_height/2 + 5}" text-anchor="end" font-size="14" fill="#374151">{ch}</text>
+            <text x="{label_width - 10}" y="{bar_height/2 + 5}" text-anchor="end" font-size="14" fill="#374151">{escape(str(ch))}</text>
             <rect x="{label_width}" y="5" width="{bar_width}" height="{bar_height - 10}" fill="{color}" rx="4"/>
             <text x="{label_width + bar_width + 10}" y="{bar_height/2 + 5}" font-size="14" font-weight="bold" fill="#1f2937">{roi:.2f}x</text>
             <line x1="{label_width + ci_lo * scale}" y1="{bar_height/2}" x2="{label_width + ci_hi * scale}" y2="{bar_height/2}" stroke="#6b7280" stroke-width="2"/>
@@ -171,7 +173,7 @@ def generate_contribution_chart_svg(results: dict) -> str:
         legend_items.append(f'''
         <g transform="translate({size + 20}, {y})">
             <rect width="16" height="16" fill="{color}" rx="2"/>
-            <text x="24" y="13" font-size="13" fill="#374151">{ch}: {pct:.1f}%</text>
+            <text x="24" y="13" font-size="13" fill="#374151">{escape(str(ch))}: {pct:.1f}%</text>
         </g>
         ''')
 
@@ -200,7 +202,6 @@ def generate_marginal_roi_chart_svg(results: dict) -> str:
 
     # Chart dimensions
     width = 500
-    bar_height = 30
     gap = 40
     label_width = 100
     chart_height = len(channels) * gap + 40
@@ -218,7 +219,7 @@ def generate_marginal_roi_chart_svg(results: dict) -> str:
 
         svg_bars.append(f'''
         <g transform="translate(0, {y})">
-            <text x="{label_width - 10}" y="20" text-anchor="end" font-size="13" fill="#374151">{ch}</text>
+            <text x="{label_width - 10}" y="20" text-anchor="end" font-size="13" fill="#374151">{escape(str(ch))}</text>
 
             <!-- Average ROI bar -->
             <rect x="{label_width}" y="0" width="{max(avg_roi * scale, 2)}" height="12" fill="#3b82f6" rx="2"/>
@@ -250,8 +251,10 @@ def generate_marginal_roi_chart_svg(results: dict) -> str:
     '''
 
 
-def interpret_roi(roi: float) -> str:
+def interpret_roi(roi: float, roi_is_monetary: bool = True) -> str:
     """Return plain English interpretation of ROI."""
+    if not roi_is_monetary:
+        return f"{roi:.4f} incremental KPI units per currency unit spent"
     if roi >= 2.0:
         return "Excellent - every $1 spent returns $" + f"{roi:.2f}"
     elif roi >= 1.0:
@@ -279,8 +282,8 @@ def generate_insights(results: dict) -> list[dict]:
 
     roi_data = results.get("roi", {})
     mroi_data = results.get("marginal_roi", {})
-    contrib_data = results.get("contributions", {})
     spend_data = results.get("metadata", {}).get("total_spend", {})
+    roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
 
     if not roi_data:
         return insights
@@ -291,15 +294,23 @@ def generate_insights(results: dict) -> list[dict]:
     worst_ch, worst_data = sorted_roi[-1]
 
     # Insight 1: Best performing channel
-    insights.append({
-        "type": "success",
-        "title": f"{best_ch.title()} is your best performing channel",
-        "detail": f"With an ROI of {best_data.get('mean', 0):.2f}x, every $1 spent on {best_ch} generates ${best_data.get('mean', 0):.2f} in conversions.",
-        "action": "Consider increasing budget allocation to this channel."
-    })
+    if roi_is_monetary:
+        insights.append({
+            "type": "success",
+            "title": f"{best_ch.title()} is your best performing channel",
+            "detail": f"With an ROI of {best_data.get('mean', 0):.2f}x, every $1 spent on {best_ch} generates ${best_data.get('mean', 0):.2f} in incremental value.",
+            "action": "Consider increasing budget allocation if marginal ROI and uncertainty support it."
+        })
+    else:
+        insights.append({
+            "type": "info",
+            "title": f"{best_ch.title()} has the highest modeled KPI efficiency",
+            "detail": f"The model estimates {best_data.get('mean', 0):.4f} incremental KPI units per currency unit spent.",
+            "action": "Use CPIK and uncertainty intervals—not a 1.0x breakeven threshold—until revenue data is supplied."
+        })
 
     # Insight 2: Worst performing (if below 1.0)
-    if worst_data.get("mean", 0) < 1.0:
+    if roi_is_monetary and worst_data.get("mean", 0) < 1.0:
         insights.append({
             "type": "warning",
             "title": f"{worst_ch.title()} has ROI below breakeven",
@@ -372,9 +383,9 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
     charts = results.get("charts", {})
 
     # Use native PNG charts if available, fall back to SVG generation
-    roi_chart = _embed_png_chart(charts.get("roi_chart")) or generate_roi_chart_svg(results)
-    contrib_chart = _embed_png_chart(charts.get("contribution_chart")) or generate_contribution_chart_svg(results)
-    mroi_chart = _embed_png_chart(charts.get("response_curves")) or generate_marginal_roi_chart_svg(results)
+    roi_chart = _embed_png_chart(charts.get("roi_bar_chart")) or generate_roi_chart_svg(results)
+    contrib_chart = _embed_png_chart(charts.get("contribution_pie")) or generate_contribution_chart_svg(results)
+    mroi_chart = _embed_png_chart(charts.get("roi_vs_mroi")) or generate_marginal_roi_chart_svg(results)
 
     # Insight cards HTML
     insight_cards = ""
@@ -398,22 +409,31 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
         <div class="insight-card" style="border-left: 4px solid {color};">
             <div class="insight-header">
                 <span class="insight-icon" style="color: {color};">{icon}</span>
-                <strong>{insight["title"]}</strong>
+                <strong>{escape(str(insight["title"]))}</strong>
             </div>
-            <p class="insight-detail">{insight["detail"]}</p>
-            <p class="insight-action"><strong>Recommendation:</strong> {insight["action"]}</p>
+            <p class="insight-detail">{escape(str(insight["detail"]))}</p>
+            <p class="insight-action"><strong>Recommendation:</strong> {escape(str(insight["action"]))}</p>
         </div>
         '''
 
     # ROI interpretation table
     roi_rows = ""
     roi_data = results.get("roi", {})
+    roi_is_monetary = metadata.get("roi_is_monetary", False)
+    roi_heading = "Return on Investment by Channel" if roi_is_monetary else "KPI Efficiency by Channel"
+    roi_explainer = (
+        "ROI tells you how much incremental value you get back for every dollar spent. "
+        "An ROI of 1.5x means $1.50 of incremental value per $1 spent."
+        if roi_is_monetary
+        else "Revenue data was not supplied, so this metric is incremental KPI units per "
+        "currency unit spent. A value below 1.0 is not evidence that a channel loses money."
+    )
     for ch, data in sorted(roi_data.items(), key=lambda x: -x[1].get("mean", 0)):
         roi = data.get("mean", 0)
-        interpretation = interpret_roi(roi)
+        interpretation = interpret_roi(roi, roi_is_monetary)
         roi_rows += f'''
         <tr>
-            <td><strong>{ch.title()}</strong></td>
+            <td><strong>{escape(str(ch).title())}</strong></td>
             <td>{roi:.2f}x</td>
             <td>{interpretation}</td>
         </tr>
@@ -584,10 +604,10 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
         </div>
         {insight_cards if insight_cards else "<p>No significant insights detected.</p>"}
 
-        <h2>Return on Investment by Channel</h2>
+        <h2>{roi_heading}</h2>
         <div class="explainer">
-            <div class="explainer-title">What is ROI?</div>
-            ROI (Return on Investment) tells you how much revenue you get back for every dollar spent. An ROI of 1.5x means you get $1.50 back for every $1 spent. Above 1.0x is profitable.
+            <div class="explainer-title">What does this metric mean?</div>
+            {roi_explainer}
         </div>
         <div class="chart-container">
             {roi_chart}

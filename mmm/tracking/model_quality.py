@@ -6,10 +6,9 @@ and identify when the model needs retuning.
 """
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -19,9 +18,9 @@ class ModelMetrics:
     data_file: str
 
     # Predictive accuracy
-    r_squared: Optional[float] = None
-    mape: Optional[float] = None  # Mean Absolute Percentage Error
-    wmape: Optional[float] = None  # Weighted MAPE
+    r_squared: float | None = None
+    mape: float | None = None  # Mean Absolute Percentage Error
+    wmape: float | None = None  # Weighted MAPE
 
     # Data quality
     n_time_periods: int = 0
@@ -33,7 +32,7 @@ class ModelMetrics:
     rhat_warnings: int = 0
 
     # Confidence (avg CI width as % of mean)
-    avg_roi_ci_width: Optional[float] = None
+    avg_roi_ci_width: float | None = None
 
 
 def extract_metrics_from_results(results: dict, data_file: str = "") -> ModelMetrics:
@@ -83,15 +82,25 @@ class ModelQualityTracker:
         if self.tracking_file.exists():
             try:
                 with open(self.tracking_file) as f:
-                    self.history = json.load(f)
-            except Exception:
-                self.history = []
+                    history = json.load(f)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Model quality history is invalid JSON: {self.tracking_file}"
+                ) from exc
+            if not isinstance(history, list):
+                raise ValueError(
+                    f"Model quality history must contain a JSON list: {self.tracking_file}"
+                )
+            self.history = history
 
     def _save(self):
-        """Save history to file."""
+        """Save history atomically so interruption cannot erase prior runs."""
         self.tracking_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.tracking_file, "w") as f:
+        temporary_file = self.tracking_file.with_suffix(self.tracking_file.suffix + ".tmp")
+        with open(temporary_file, "w") as f:
             json.dump(self.history, f, indent=2)
+            f.flush()
+        temporary_file.replace(self.tracking_file)
 
     def add_run(self, metrics: ModelMetrics):
         """Add a new run to history."""

@@ -47,7 +47,7 @@ Sommmelier runs Marketing Mix Models (MMM) to measure marketing channel effectiv
 You are not just a report reader. You are an MMM coach. Your job is to:
 
 1. **Read context** to understand who you're advising, what they care about, and what's been tried before
-2. **Interpret** results in their business context (not just "ROI is 1.2x" but "ROI is 1.2x which means Meta is profitable but not your best channel given your $25 CPA target")
+2. **Interpret** results in their business context. Only call ROI profitable when `metadata.roi_is_monetary` is true; otherwise it is incremental KPI units per currency unit and CPIK is the safer business metric.
 3. **Diagnose** model quality issues -- convergence problems, wide confidence intervals, prior-posterior divergence, residual patterns
 4. **Prescribe improvements** like a data scientist would:
    - Which channels need incrementality tests (and roughly how to design them)
@@ -80,6 +80,8 @@ This produces:
 ## Key Metrics to Interpret
 
 ### ROI (Return on Investment)
+Use the profitability thresholds below only when `metadata.roi_is_monetary` is true. Without revenue or revenue-per-KPI data, Meridian's value is KPI efficiency, not monetary return.
+
 - **> 1.5x**: Strong performer, consider scaling
 - **1.0 - 1.5x**: Profitable, maintain or test scaling
 - **0.5 - 1.0x**: Underperforming, needs optimization

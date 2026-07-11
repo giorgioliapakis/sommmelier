@@ -20,7 +20,9 @@ from datetime import datetime
 from pathlib import Path
 
 
-def run_command(cmd: list[str], description: str) -> tuple[bool, str]:
+def run_command(
+    cmd: list[str], description: str, timeout_seconds: int = 7200
+) -> tuple[bool, str]:
     """Run a command and return success status and output."""
     print(f"\n{'='*60}")
     print(f"STEP: {description}")
@@ -31,7 +33,7 @@ def run_command(cmd: list[str], description: str) -> tuple[bool, str]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=3600,
+            timeout=timeout_seconds,
         )
         output = result.stdout + result.stderr
         print(output)
@@ -42,12 +44,13 @@ def run_command(cmd: list[str], description: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def find_latest_results() -> Path | None:
-    """Find the most recent results file."""
+def find_latest_results(exclude: set[Path] | None = None) -> Path | None:
+    """Find the most recent results file, optionally excluding pre-run files."""
     outputs = Path("outputs")
-    results = list(outputs.glob("full_results_*.json"))
-    if not results:
-        results = list(outputs.glob("results_*.json"))
+    results = list(outputs.glob("full_results_*.json")) + list(outputs.glob("results_*.json"))
+    if exclude:
+        excluded = {path.resolve() for path in exclude}
+        results = [path for path in results if path.resolve() not in excluded]
     if results:
         return max(results, key=lambda f: f.stat().st_mtime)
     return None
@@ -132,8 +135,13 @@ def main():
         print("  Model will use default priors (wider uncertainty)")
         print("  To improve accuracy, create data/calibration.json with experiment results")
 
-    # Step 3: Run MMM on Modal
-    modal_cmd = ["modal", "run", "--detach", "modal_mmm_full.py", "--data", str(data_file)] + calibration_args
+    # Step 3: Run MMM on Modal. This must remain attached so downstream steps
+    # cannot accidentally consume a stale result from a previous run.
+    outputs_dir = Path("outputs")
+    existing_results = set(outputs_dir.glob("full_results_*.json")) | set(
+        outputs_dir.glob("results_*.json")
+    )
+    modal_cmd = ["modal", "run", "modal_mmm_full.py", "--data", str(data_file)] + calibration_args
     success, output = run_command(
         modal_cmd,
         "Running MMM model on Modal GPU"
@@ -146,9 +154,9 @@ def main():
         sys.exit(1)
 
     # Find the results file
-    results_file = find_latest_results()
+    results_file = find_latest_results(exclude=existing_results)
     if not results_file:
-        print("\nERROR: No results file found after MMM run.")
+        print("\nERROR: Modal completed but did not create a new local results file.")
         sys.exit(1)
 
     results["results_file"] = str(results_file)
@@ -156,7 +164,7 @@ def main():
 
     # Step 4: Generate HTML report (via CLI)
     success, output = run_command(
-        ["python", "-m", "mmm.cli.main", "report", str(results_file)],
+        [sys.executable, "-m", "mmm.cli.main", "report", str(results_file)],
         "Generating HTML report"
     )
     results["steps"]["report"] = {"success": success}
@@ -168,7 +176,7 @@ def main():
 
     # Step 5: Run analysis and recommendations (via CLI)
     success, output = run_command(
-        ["python", "-m", "mmm.cli.main", "analyze", str(results_file)],
+        [sys.executable, "-m", "mmm.cli.main", "analyze", str(results_file)],
         "Analyzing results and generating recommendations"
     )
     results["steps"]["analysis"] = {"success": success, "output": output}
@@ -199,7 +207,7 @@ def main():
     print("\n" + "=" * 60)
     print("WEEKLY RUN COMPLETE")
     print("=" * 60)
-    print(f"\nOutputs:")
+    print("\nOutputs:")
     print(f"  Results JSON:   {results.get('results_file', 'N/A')}")
     print(f"  HTML Report:    {results.get('report_file', 'N/A')}")
     print(f"  Analysis:       {results.get('analysis_file', 'N/A')}")

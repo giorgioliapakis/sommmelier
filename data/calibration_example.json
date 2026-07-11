@@ -8,7 +8,7 @@
       "lift_ci_upper": 0.2,
       "test_period_weeks": 4,
       "test_spend": 50000,
-      "test_conversions": null,
+      "test_conversions": 10000,
       "notes": "Q4 2025 geo-lift test"
     }
   ],
