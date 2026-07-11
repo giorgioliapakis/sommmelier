@@ -185,7 +185,7 @@ If the user has a data file ready:
 If no data yet:
 - Provide clear instructions on what to collect, based on what they told you about their data sources
 - Reference `data/examples/sample_data.csv` as a format template
-- Explain the minimum requirements: date, geo, conversions, {channel}_spend columns
+- Explain the minimum requirements: exact weekly date, geo, population, conversions, and spend plus impressions (or reach/frequency) for each paid channel
 
 ## Step 9: Generate Calibration Template
 
@@ -198,13 +198,17 @@ Check if `data/calibration.json` already exists. If not:
   Write a pre-filled `data/calibration.json` directly using the Write tool, following this schema:
   ```json
   {
-    "experiments": [{"channel": "...", "experiment_type": "geo_lift", "lift_estimate": 0.0, ...}],
-    "platform_conversions": [{"channel": "...", "platform_conversions": 0, "period_weeks": 4, "spend": 0, ...}],
-    "prior_beliefs": [{"channel": "...", "expected_roi_low": 0.0, "expected_roi_high": 0.0, "confidence": "medium", ...}],
+    "experiments": [{"channel": "...", "experiment_type": "geo_lift", "lift_estimate": 0.0, "metric": "incremental_kpi_per_currency", ...}],
+    "platform_conversions": [{"channel": "...", "platform_conversions": 0, "period_weeks": 4, "spend": 0, "metric": "incremental_kpi_per_currency", ...}],
+    "prior_beliefs": [{"channel": "...", "expected_roi_low": 0.0, "expected_roi_high": 0.0, "metric": "incremental_kpi_per_currency", "confidence": "medium", ...}],
     "control_variables": {},
     "notes": ""
   }
   ```
+
+  Use one metric throughout the file. Choose `monetary_roi` only when the model
+  has revenue or revenue-per-KPI data; otherwise use
+  `incremental_kpi_per_currency`. Never mix the two in one calibration file.
 
 Update `context/calibration-rationale.md` with what was set and why.
 

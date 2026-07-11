@@ -53,6 +53,14 @@ class DataConfig(BaseModel):
         None, description="Revenue-per-KPI column, when already available"
     )
     population_column: str | None = Field(None, description="Population column for geo scaling")
+    allow_population_estimates: bool = Field(
+        False,
+        description="Allow coarse built-in population estimates when no population column exists",
+    )
+    allow_impression_estimates: bool = Field(
+        False,
+        description="Allow the coarse $10 CPM fallback when a paid channel lacks execution data",
+    )
 
     # Media channels
     media_channels: list[MediaChannel] = Field(

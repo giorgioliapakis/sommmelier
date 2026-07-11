@@ -116,8 +116,9 @@ def run(
     console.print(results.summary())
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    mmm.save(output_dir / "model.pkl")
-    console.print(f"\n[green]✓[/green] Model saved to {output_dir / 'model.pkl'}")
+    model_bundle = output_dir / "model"
+    mmm.save(model_bundle)
+    console.print(f"\n[green]✓[/green] Model saved to {model_bundle}")
 
     generate_report(mmm, output_dir / "report.md")
     console.print(f"[green]✓[/green] Report saved to {output_dir / 'report.md'}")
@@ -138,6 +139,14 @@ def analyze(
         console.print("[red]Error:[/red] No results file found.")
         console.print("Run: modal run modal_mmm_full.py --data <your_data.csv>")
         raise typer.Exit(1)
+
+    from mmm.result_manifest import decision_readiness
+
+    readiness, reason = decision_readiness(json.loads(results_path.read_text()))
+    if not readiness:
+        console.print(f"[red]Recommendations blocked:[/red] {reason}")
+        console.print("Generate the HTML report to review diagnostics, then refit the model.")
+        raise typer.Exit(2)
 
     console.print(f"Analyzing: {results_path}")
     report = generate_analysis(results_path)

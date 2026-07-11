@@ -7,6 +7,7 @@ from .calibration_data import (
     PriorBelief,
     calculate_channel_priors,
     create_calibration_template,
+    infer_calibration_metric,
     load_calibration,
     save_calibration,
 )
@@ -20,4 +21,5 @@ __all__ = [
     "load_calibration",
     "save_calibration",
     "create_calibration_template",
+    "infer_calibration_metric",
 ]

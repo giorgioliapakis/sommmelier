@@ -50,28 +50,32 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
     elif "population" in df.columns:
         builder = builder.with_population(df)
     else:
-        # Add default population estimates if not provided
-        # This is a fallback - real data should include population
+        if not config.allow_population_estimates:
+            raise ValueError(
+                "Population data is required. Set allow_population_estimates=True "
+                "only when the coarse built-in fallback is acceptable."
+            )
         geo_populations = _estimate_population(df["geo"].unique())
         df["population"] = df["geo"].map(geo_populations)
         builder = builder.with_population(df)
 
     # Add revenue per KPI if available. A total revenue column must be converted first.
-    revenue_per_kpi_column = config.revenue_per_kpi_column
-    if revenue_per_kpi_column and revenue_per_kpi_column in df.columns:
-        builder = builder.with_revenue_per_kpi(
-            df, revenue_per_kpi_col=revenue_per_kpi_column
-        )
-    elif config.revenue_column and config.revenue_column in df.columns:
-        revenue_per_kpi_column = "_revenue_per_kpi"
-        kpi = df[config.kpi_column]
-        revenue = df[config.revenue_column]
-        if ((kpi == 0) & (revenue != 0)).any():
-            raise ValueError("Revenue cannot be non-zero when KPI is zero")
-        df[revenue_per_kpi_column] = revenue.div(kpi.where(kpi != 0)).fillna(0)
-        builder = builder.with_revenue_per_kpi(
-            df, revenue_per_kpi_col=revenue_per_kpi_column
-        )
+    if config.kpi_type == "non_revenue":
+        revenue_per_kpi_column = config.revenue_per_kpi_column
+        if revenue_per_kpi_column and revenue_per_kpi_column in df.columns:
+            builder = builder.with_revenue_per_kpi(
+                df, revenue_per_kpi_col=revenue_per_kpi_column
+            )
+        elif config.revenue_column and config.revenue_column in df.columns:
+            revenue_per_kpi_column = "_revenue_per_kpi"
+            kpi = df[config.kpi_column]
+            revenue = df[config.revenue_column]
+            if ((kpi == 0) & (revenue != 0)).any():
+                raise ValueError("Revenue cannot be non-zero when KPI is zero")
+            df[revenue_per_kpi_column] = revenue.div(kpi.where(kpi != 0)).fillna(0)
+            builder = builder.with_revenue_per_kpi(
+                df, revenue_per_kpi_col=revenue_per_kpi_column
+            )
 
     # Separate media channels into spend+impressions vs reach+frequency
     si_channel_names = []
@@ -109,6 +113,12 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
             if impressions_col and impressions_col in df.columns:
                 si_impression_cols.append(impressions_col)
             else:
+                if not config.allow_impression_estimates:
+                    raise ValueError(
+                        f"Channel '{name}' needs impressions or reach/frequency data. "
+                        "Set allow_impression_estimates=True only when the coarse "
+                        "$10 CPM fallback is acceptable."
+                    )
                 est_col = f"{name}_impressions_est"
                 df[est_col] = df[spend_col] * 100  # $10 CPM
                 si_impression_cols.append(est_col)
@@ -134,8 +144,8 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
 
     # Add organic media channels
     if config.organic_channels:
-        organic_names = [ch.name if hasattr(ch, 'name') else ch["name"] for ch in config.organic_channels]
-        organic_cols = [ch.column if hasattr(ch, 'column') else ch["column"] for ch in config.organic_channels]
+        organic_names = [channel.name for channel in config.organic_channels]
+        organic_cols = [channel.column for channel in config.organic_channels]
         valid_organic = [(n, c) for n, c in zip(organic_names, organic_cols) if c in df.columns]
         if valid_organic:
             builder = builder.with_organic_media(

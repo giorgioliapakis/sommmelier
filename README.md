@@ -100,14 +100,16 @@ A CSV with weekly marketing data. At minimum:
 |--------|----------|---------|
 | `date` or `time` | Yes | `2024-01-01` |
 | `geo` | Yes | `US`, `UK`, `AU` |
+| `population` | Yes | `330000000` |
 | `conversions` | Yes | `1523` |
 | `{channel}_spend` | Yes | `meta_spend`, `google_spend` |
+| `{channel}_impressions` or reach/frequency | Yes | `meta_impressions` |
 
 To get monetary ROI, also provide either `revenue`, `revenue_per_kpi`, or `revenue_per_conversion`. Without one of those columns, Sommmelier reports incremental KPI units per currency unit spent; a value below 1.0 does not mean the channel is unprofitable.
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| Time periods | 26 weeks | 52+ weeks |
+| Time periods | 26 exact weekly periods | 52+ exact weekly periods |
 | Geographies | 1 | 5+ |
 | Media channels | 2 | 3-7 |
 
@@ -115,7 +117,7 @@ To get monetary ROI, also provide either `revenue`, `revenue_per_kpi`, or `reven
 
 The system tells you which of these matter most for your situation. You don't need all of them upfront. Start with what you have.
 
-**Impression data** (`{channel}_impression` columns). Without this, the model estimates impressions from spend at $10 CPM. Real impressions are better.
+**Impression data** (`{channel}_impression` or `{channel}_impressions` columns). A coarse $10 CPM estimate is available only through the explicit `--allow-impression-estimates` flag; fabricated execution data is never used silently.
 
 **Reach & frequency data** (`{channel}_reach` and `{channel}_frequency` columns). For channels where you have reach and frequency data (e.g., YouTube, TV), the model uses frequency-based saturation instead of spend-based. Produces optimal frequency recommendations.
 
@@ -139,11 +141,14 @@ These are NOT auto-detected. You add them as columns to your CSV. The model pick
 
 1. **Incrementality experiments** (strongest). Geo-lift tests, holdout experiments, or platform lift studies. These dramatically tighten confidence intervals. The system will recommend which channels to test and how.
 
-2. **Platform-reported metrics** (useful as a ceiling). What Meta Ads Manager or Google Ads reports as your ROAS or CPA. The model treats these as a soft upper bound since platforms tend to overclaim by 2-5x. You provide these numbers during `/init` or by editing `data/calibration.json` directly.
+2. **Platform-reported outcomes** (useful as a ceiling). Attributed conversion or revenue outcomes from Meta Ads Manager or Google Ads. The model treats these as a soft upper bound since platforms tend to overclaim by 2-5x. You provide these numbers during `/init` or by editing `data/calibration.json` directly.
 
 3. **Your team's beliefs** (better than nothing). "We think Meta returns about 1-2x" with a confidence level. Even rough estimates beat the model's default (wide-open priors centered around 1x).
 
 See [`data/calibration_example.json`](data/calibration_example.json) for the format.
+Every calibration record declares either `monetary_roi` or
+`incremental_kpi_per_currency`; the run is rejected before GPU spend if units are
+mixed or do not match the model outcome.
 
 ### What the system recommends you add
 

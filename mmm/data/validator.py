@@ -209,6 +209,27 @@ def validate_dataset(dataset: MMMDataset) -> ValidationReport:
                 else "Channels with zero total spend: " + ", ".join(zero_spend_channels),
             )
 
+        channels_without_execution = [
+            channel.name
+            for channel in config.media_channels
+            if not channel.impressions_column
+            and not (channel.reach_column and channel.frequency_column)
+        ]
+        add_result(
+            not channels_without_execution or config.allow_impression_estimates,
+            "Media Execution Data",
+            "Every paid channel has impressions or reach and frequency"
+            if not channels_without_execution
+            else "Impression estimates explicitly enabled for: "
+            + ", ".join(channels_without_execution)
+            if config.allow_impression_estimates
+            else "Missing impressions or reach/frequency for: "
+            + ", ".join(channels_without_execution),
+            "warning"
+            if channels_without_execution and config.allow_impression_estimates
+            else "error",
+        )
+
     # Check 6: Every additional model input must be complete, numeric, and finite.
     auxiliary_columns = [
         column
@@ -311,7 +332,7 @@ def validate_dataset(dataset: MMMDataset) -> ValidationReport:
         "warning" if 0 < len(dataset.media_channels) < 3 else "info",
     )
 
-    # Check 8: Date continuity (no large gaps)
+    # Check 8: Date continuity and exact weekly cadence.
     df_sorted = df.sort_values(config.date_column)
     date_diffs = df_sorted.groupby(config.geo_column)[config.date_column].diff()
     max_gap = date_diffs.max()
@@ -322,6 +343,31 @@ def validate_dataset(dataset: MMMDataset) -> ValidationReport:
         "Date Continuity",
         f"Max gap: {max_gap.days if pd.notna(max_gap) else 0} days",
         "warning" if has_gaps else "info",
+    )
+
+    unique_dates = pd.Series(df[config.date_column].drop_duplicates().sort_values())
+    cadence_days = unique_dates.diff().dropna().dt.days
+    irregular_cadence = sorted(set(cadence_days[cadence_days != 7].astype(int).tolist()))
+    add_result(
+        not irregular_cadence,
+        "Weekly Cadence",
+        "All periods are exactly seven days apart"
+        if not irregular_cadence
+        else "Non-weekly gaps found (days): " + ", ".join(map(str, irregular_cadence)),
+    )
+
+    population_available = bool(
+        config.population_column and config.population_column in df.columns
+    )
+    add_result(
+        population_available or config.allow_population_estimates,
+        "Population Data",
+        f"Using population column '{config.population_column}'"
+        if population_available
+        else "Population estimates explicitly enabled"
+        if config.allow_population_estimates
+        else "A population column is required; coarse estimates are opt-in",
+        "warning" if config.allow_population_estimates and not population_available else "error",
     )
 
     # Check 9: KPI variance (should have some variation)

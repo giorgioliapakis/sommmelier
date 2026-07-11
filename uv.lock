@@ -550,6 +550,10 @@ wheels = [
 and-cuda = [
     { name = "tensorflow", extra = ["and-cuda"] },
 ]
+schema = [
+    { name = "mmm-proto-schema" },
+    { name = "semver" },
+]
 
 [[package]]
 name = "google-pasta"
@@ -561,6 +565,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/35/4a/0bd53b36ff0323d10d5f24ebd67af2de10a1117f5cf4d7add90df92756f1/google-pasta-0.2.0.tar.gz", hash = "sha256:c9f2c8dfc8f96d0d5808299920721be30c9eec37f2389f28904f454565c8a16e", size = 40430 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/de/c648ef6835192e6e2cc03f40b19eeda4382c49b5bafb43d88b931c4c74ac/google_pasta-0.2.0-py3-none-any.whl", hash = "sha256:b32482794a366b5366a32c92a9a9201b107821889935a02b3e51f6b432ea84ed", size = 57471 },
+]
+
+[[package]]
+name = "googleapis-common-protos"
+version = "1.75.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googleapis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631 },
 ]
 
 [[package]]
@@ -976,6 +992,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3a/cb/28ce52eb94390dda42599c98ea0204d74799e4d8047a0eb559b6fd648056/ml_dtypes-0.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9ad459e99793fa6e13bd5b7e6792c8f9190b4e5a1b45c63aba14a4d0a7f1d5ff", size = 5009002 },
     { url = "https://files.pythonhosted.org/packages/f5/f0/0cfadd537c5470378b1b32bd859cf2824972174b51b873c9d95cfd7475a5/ml_dtypes-0.5.4-cp312-cp312-win_amd64.whl", hash = "sha256:c1a953995cccb9e25a4ae19e34316671e4e2edaebe4cf538229b1fc7109087b7", size = 212222 },
     { url = "https://files.pythonhosted.org/packages/16/2e/9acc86985bfad8f2c2d30291b27cd2bb4c74cea08695bd540906ed744249/ml_dtypes-0.5.4-cp312-cp312-win_arm64.whl", hash = "sha256:9bad06436568442575beb2d03389aa7456c690a5b05892c471215bfd8cf39460", size = 160793 },
+]
+
+[[package]]
+name = "mmm-proto-schema"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "googleapis-common-protos" },
+    { name = "protobuf" },
+    { name = "tensorflow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e3/9f/4aeb984838ad9aeb22753d67ceb123ae4d1f80d1584e20c1e31d2b3f6627/mmm_proto_schema-1.2.2.tar.gz", hash = "sha256:d40fcf8ff34b8871ae0e33b3b8c132ba1ad570dbf64c9748be196c5db9bc2868", size = 26128 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/d5/ece7c87b094bd091a44930bb3cf718b80ce99feaf4a10b2422360622676d/mmm_proto_schema-1.2.2-py3-none-any.whl", hash = "sha256:50650b683eaf1442395786d4d001254234c1ee888f5256b735942839e77324b4", size = 72500 },
 ]
 
 [[package]]
@@ -1820,6 +1850,15 @@ wheels = [
 ]
 
 [[package]]
+name = "semver"
+version = "3.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/d1/d3159231aec234a59dd7d601e9dd9fe96f3afff15efd33c1070019b26132/semver-3.0.4.tar.gz", hash = "sha256:afc7d8c584a5ed0a11033af086e8af226a9c0b206f313e0301f8dd7b6b589602", size = 269730 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/24/4d91e05817e92e3a61c8a21e08fd0f390f5301f1c448b137c57c4bc6e543/semver-3.0.4-py3-none-any.whl", hash = "sha256:9c824d87ba7f7ab4a1890799cec8596f15c1241cb473404ea1cb0c55e4b04746", size = 17912 },
+]
+
+[[package]]
 name = "setuptools"
 version = "83.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1851,7 +1890,7 @@ name = "sommmelier"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "google-meridian" },
+    { name = "google-meridian", extra = ["schema"] },
     { name = "matplotlib" },
     { name = "modal" },
     { name = "numpy" },
@@ -1870,13 +1909,13 @@ dev = [
     { name = "ruff" },
 ]
 gpu = [
-    { name = "google-meridian", extra = ["and-cuda"] },
+    { name = "google-meridian", extra = ["and-cuda", "schema"] },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "google-meridian", specifier = ">=1.6.2,<1.7" },
-    { name = "google-meridian", extras = ["and-cuda"], marker = "extra == 'gpu'", specifier = ">=1.6.2,<1.7" },
+    { name = "google-meridian", extras = ["and-cuda", "schema"], marker = "extra == 'gpu'", specifier = ">=1.6.2,<1.7" },
+    { name = "google-meridian", extras = ["schema"], specifier = ">=1.6.2,<1.7" },
     { name = "matplotlib", specifier = ">=3.8.0,<3.10" },
     { name = "modal", specifier = ">=0.64.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },

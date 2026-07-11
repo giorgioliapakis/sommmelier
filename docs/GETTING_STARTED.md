@@ -41,11 +41,11 @@ This runs a full MMM on Google's sample dataset. Takes ~10-15 minutes.
 Create a CSV with your marketing data:
 
 ```csv
-date,geo,conversions,meta_spend,google_spend,tiktok_spend
-2024-01-01,US,1523,15000,8500,5000
-2024-01-01,UK,412,6000,3500,2000
-2024-01-08,US,1687,16000,9000,5500
-2024-01-08,UK,398,5500,3200,1800
+date,geo,population,conversions,meta_spend,meta_impressions,google_spend,google_impressions,tiktok_spend,tiktok_impressions
+2024-01-01,US,330000000,1523,15000,1200000,8500,700000,5000,400000
+2024-01-01,UK,67000000,412,6000,480000,3500,290000,2000,160000
+2024-01-08,US,330000000,1687,16000,1280000,9000,740000,5500,440000
+2024-01-08,UK,67000000,398,5500,450000,3200,265000,1800,145000
 ...
 ```
 
@@ -53,13 +53,13 @@ date,geo,conversions,meta_spend,google_spend,tiktok_spend
 
 - `date` - Weekly dates (YYYY-MM-DD)
 - `geo` - Geographic region codes
+- `population` - Population for each geography
 - `conversions` - Your KPI (conversions, signups, revenue, etc.)
 - `{channel}_spend` - Spend for each marketing channel
 
 ### Optional Columns
 
-- `{channel}_impression` - Impressions (estimated from spend if missing)
-- `population` - Geographic population (uses defaults if missing)
+- `{channel}_impression` - Impressions for each paid channel (or provide reach and frequency)
 - `revenue`, `revenue_per_kpi`, or `revenue_per_conversion` - Enables monetary ROI
 - `{name}_control` - Control variables (seasonality, promotions, etc.)
 
@@ -67,7 +67,7 @@ date,geo,conversions,meta_spend,google_spend,tiktok_spend
 
 - **Minimum 26 weeks** of data (52+ recommended)
 - At least **2 marketing channels**
-- Consistent weekly granularity
+- Exact seven-day cadence with no irregular periods
 
 ## Step 5: Run Your Model
 
