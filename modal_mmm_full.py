@@ -12,13 +12,12 @@ import modal
 mmm_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "google-meridian==1.4.0",
+        "google-meridian[and-cuda]==1.6.2",
         "pandas>=2.0.0",
         "pyarrow>=14.0.0",
-        "matplotlib>=3.8.0",
-    )
-    .pip_install(
-        "jax[cuda12]",
+        # ArviZ 0.19 (required by Meridian 1.6) uses a Matplotlib API removed in 3.10+.
+        "matplotlib>=3.8.0,<3.10",
+        "vl-convert-python>=1.7.0",
     )
     .add_local_python_source("mmm", copy=True)
 )
@@ -63,6 +62,12 @@ def fit_mmm_full(
     import pandas as pd
 
     from mmm.detection import detect_columns
+    from mmm.meridian_compat import (
+        extract_optimization_result,
+        extract_rhat_diagnostics,
+        save_chart,
+        serialize_model_review,
+    )
 
     # Monkey-patch numpy 2.x compatibility for TFP
     _original_reshape = np.reshape
@@ -78,8 +83,8 @@ def fit_mmm_full(
 
     print(f"Starting full MMM analysis at {datetime.now()}")
 
-    import jax
-    print(f"JAX devices: {jax.devices()}")
+    import tensorflow as tf
+    print(f"TensorFlow GPUs: {tf.config.list_physical_devices('GPU')}")
 
     # Load and prepare data
     df = pd.read_csv(io.StringIO(data_csv))
@@ -407,11 +412,14 @@ def fit_mmm_full(
     print("Posterior sampling complete!")
 
     # Initialize results
+    from importlib.metadata import version
+
     from meridian.analysis import analyzer, optimizer
 
     results = {
         "timestamp": datetime.now().isoformat(),
         "metadata": {
+            "meridian_version": version("google-meridian"),
             "n_time_periods": n_periods,
             "n_geos": int(df['geo'].nunique()),
             "channels": channels,
@@ -715,12 +723,14 @@ def fit_mmm_full(
     print("Extracting MCMC diagnostics...")
     try:
         rhat_df = mmm_analyzer.rhat_summary()
-        if rhat_df is not None and len(rhat_df) > 0:
-            bad_rhats = rhat_df[rhat_df['rhat'] > 1.1] if 'rhat' in rhat_df.columns else []
-            results["diagnostics"]["rhat_warnings"] = len(bad_rhats)
-            results["diagnostics"]["convergence_ok"] = len(bad_rhats) == 0
+        results["diagnostics"].update(extract_rhat_diagnostics(rhat_df))
     except Exception as e:
         print(f"Warning: Diagnostics extraction failed: {e}")
+        results["diagnostics"].update({
+            "convergence_ok": False,
+            "diagnostics_available": False,
+            "error": str(e),
+        })
 
     # 8. ModelReviewer (diagnostic checks)
     print("Running ModelReviewer...")
@@ -730,25 +740,17 @@ def fit_mmm_full(
         model_reviewer = reviewer.ModelReviewer(mmm)
         review_result = model_reviewer.run()
 
-        # Store structured results — handle various return types
-        results["model_review"] = {}
-        if isinstance(review_result, dict):
-            for check_name, check_result in review_result.items():
-                results["model_review"][check_name] = {
-                    "passed": bool(check_result.get("passed", True)) if isinstance(check_result, dict) else True,
-                    "details": str(check_result),
-                }
-        elif isinstance(review_result, list):
-            for item in review_result:
-                name = item.get("name", "unknown") if isinstance(item, dict) else str(item)
-                results["model_review"][name] = {
-                    "passed": item.get("passed", True) if isinstance(item, dict) else True,
-                    "details": str(item),
-                }
-        else:
-            results["model_review"]["raw"] = str(review_result)
+        results["model_review"] = serialize_model_review(review_result)
+        review_checks = results["model_review"].get("checks", [])
+        convergence_check = next(
+            (check for check in review_checks if check["name"] == "Convergence"), None
+        )
+        if convergence_check:
+            results["diagnostics"]["model_reviewer_convergence"] = convergence_check["status"]
+            if convergence_check["status"] != "PASS":
+                results["diagnostics"]["convergence_ok"] = False
 
-        print(f"  ModelReviewer completed: {len(results['model_review'])} checks")
+        print(f"  ModelReviewer completed: {len(review_checks)} checks")
 
     except Exception as e:
         print(f"Warning: ModelReviewer failed: {e}")
@@ -792,14 +794,10 @@ def fit_mmm_full(
 
         for chart_name, plot_fn in chart_configs:
             try:
-                fig = plot_fn()
+                chart = plot_fn()
                 chart_path = f"{chart_dir}/{chart_name}"
-                if fig is not None and hasattr(fig, 'savefig'):
-                    fig.savefig(chart_path, dpi=150, bbox_inches='tight')
-                    plt.close(fig)
-                else:
-                    plt.savefig(chart_path, dpi=150, bbox_inches='tight')
-                    plt.close('all')
+                save_chart(chart, chart_path)
+                plt.close('all')
                 results["charts"][chart_name.replace('.png', '')] = chart_path
                 print(f"  Saved {chart_name}")
             except Exception as e_chart:
@@ -824,19 +822,14 @@ def fit_mmm_full(
             for name, mult in spend_multipliers.items():
                 try:
                     budget = current_spend * mult
-                    opt_result = budget_optimizer.optimize(fixed_budget=budget)
+                    opt_result = budget_optimizer.optimize(fixed_budget=True, budget=budget)
                     if opt_result is not None:
+                        allocation, expected_outcome = extract_optimization_result(opt_result)
                         results["optimization"][name] = {
                             "budget": float(budget),
-                            "optimal_allocation": {},
-                            "expected_outcome": None,
+                            "optimal_allocation": allocation,
+                            "expected_outcome": expected_outcome,
                         }
-                        if hasattr(opt_result, 'optimal_spend'):
-                            for i, ch in enumerate(channels):
-                                if i < len(opt_result.optimal_spend):
-                                    results["optimization"][name]["optimal_allocation"][ch] = float(opt_result.optimal_spend[i])
-                        if hasattr(opt_result, 'optimal_outcome'):
-                            results["optimization"][name]["expected_outcome"] = float(opt_result.optimal_outcome)
                 except Exception as e:
                     print(f"  Warning: Optimization for {name} failed: {e}")
 

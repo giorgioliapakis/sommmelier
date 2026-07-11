@@ -1,6 +1,5 @@
 """Tests for per-channel prior construction."""
 
-import pytest
 
 
 def _build_prior_arrays(channels: list[str], calibration_priors: dict, default_mean=0.2, default_sigma=0.9):

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mmm.data.schema import MMMDataset
+from mmm.meridian_compat import extract_optimization_result, serialize_model_review
 from mmm.model.builder import build_meridian_input
 
 if TYPE_CHECKING:
@@ -60,12 +61,16 @@ class ModelResults:
             "=" * 40,
             "",
             "Fit Metrics:",
-            f"  R-squared: {self.r_squared:.3f}" if self.r_squared else "  R-squared: N/A",
-            f"  MAPE: {self.mape:.1%}" if self.mape else "  MAPE: N/A",
+            f"  R-squared: {self.r_squared:.3f}"
+            if self.r_squared is not None
+            else "  R-squared: N/A",
+            f"  MAPE: {self.mape:.1%}" if self.mape is not None else "  MAPE: N/A",
             "",
             "Convergence:",
-            f"  Passed: {'' if self.convergence_passed else ''}",
-            f"  Max R-hat: {self.r_hat_max:.3f}" if self.r_hat_max else "",
+            f"  Passed: {'yes' if self.convergence_passed else 'no'}",
+            f"  Max R-hat: {self.r_hat_max:.3f}"
+            if self.r_hat_max is not None
+            else "  Max R-hat: N/A",
             "",
             "Channel ROI:",
         ]
@@ -106,7 +111,7 @@ class AutoMMM:
         """
         self.dataset = dataset
         self.config = config or ModelConfig()
-        self._meridian: "meridian_model.Meridian | None" = None
+        self._meridian: meridian_model.Meridian | None = None
         self._results: ModelResults | None = None
         self._input_data = None
 
@@ -120,9 +125,8 @@ class AutoMMM:
             calibration_priors: Per-channel priors from calibration module.
                 Keys are channel names, values have roi_mean, roi_sigma, source.
         """
-        from meridian.model import model, prior_distribution, spec
-
         import tensorflow_probability as tfp
+        from meridian.model import model, prior_distribution, spec
 
         # Build Meridian InputData from our dataset
         self._input_data = build_meridian_input(self.dataset)
@@ -262,18 +266,7 @@ class AutoMMM:
         model_reviewer = reviewer.ModelReviewer(self._meridian)
         raw_result = model_reviewer.run()
 
-        # Structure the results for downstream consumption
-        structured = {}
-        if isinstance(raw_result, dict):
-            for check_name, check_result in raw_result.items():
-                structured[check_name] = {
-                    "passed": bool(check_result.get("passed", True)) if isinstance(check_result, dict) else True,
-                    "details": str(check_result),
-                }
-        else:
-            structured["raw"] = str(raw_result)
-
-        return structured
+        return serialize_model_review(raw_result)
 
     def optimize_budget(
         self,
@@ -301,11 +294,11 @@ class AutoMMM:
             budget = self.dataset.total_spend
 
         # Run optimization
-        result = budget_optimizer.optimize(
-            total_budget=budget,
-        )
-
-        return result.optimal_allocation
+        result = budget_optimizer.optimize(fixed_budget=True, budget=budget)
+        allocation, _ = extract_optimization_result(result)
+        if not allocation:
+            raise RuntimeError("Meridian returned no optimized channel allocation")
+        return allocation
 
     def save(self, path: str | Path) -> None:
         """Save the fitted model to disk."""

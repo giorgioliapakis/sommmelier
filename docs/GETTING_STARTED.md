@@ -4,7 +4,7 @@ This guide walks you through setting up and running your first Marketing Mix Mod
 
 ## Prerequisites
 
-1. **Python 3.11 or 3.12** - Meridian doesn't support Python 3.13 yet
+1. **Python 3.11 or 3.12** - the versions supported by Meridian
 2. **Modal account** - Sign up at [modal.com](https://modal.com) (free tier available)
 
 ## Step 1: Clone and Install

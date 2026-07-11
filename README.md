@@ -31,6 +31,7 @@ Suggestions are tracked across runs. Act on one, re-run, and see whether it help
 ### Prerequisites
 
 - Python 3.11 or 3.12
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) for reproducible installs
 - A [Modal](https://modal.com) account (free tier available, this is where the model runs on GPU)
 - [Claude Code](https://code.claude.com/docs/en/overview) (recommended, acts as your MMM analyst)
 
@@ -39,14 +40,14 @@ Suggestions are tracked across runs. Act on one, re-run, and see whether it help
 ```bash
 git clone https://github.com/giorgioliapakis/sommmelier.git
 cd sommmelier
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv sync --frozen
 
 # Set up Modal for GPU access
-pip install modal
-modal setup
+uv run modal setup
 ```
+
+The committed `uv.lock` reproduces the tested dependency set. If you do not use
+uv, `pip install -e .` remains supported but may resolve newer transitive dependencies.
 
 ### Option A: Guided experience (Claude Code)
 

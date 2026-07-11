@@ -108,20 +108,13 @@ Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 
     # Meridian native summary
     if include_meridian_summary and mmm._meridian is not None:
-        try:
-            from meridian.analysis import summarizer
-
-            mmm_summarizer = summarizer.Summarizer(mmm._meridian)
-
-            sections.append("""
+        sections.append("""
 ---
 
 ## Technical Details
 
 *See Meridian's native summary output for detailed statistical results.*
 """)
-        except Exception:
-            pass
 
     report_content = "".join(sections)
 
