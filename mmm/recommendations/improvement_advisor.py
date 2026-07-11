@@ -7,7 +7,6 @@ that guides brands on what to collect next.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -17,8 +16,8 @@ class ImprovementQuestion:
     priority: str  # "high", "medium", "low"
     question: str  # The question to ask
     why_it_helps: str  # Explanation of why this improves the model
-    example: Optional[str] = None  # Example of what good data looks like
-    impact_estimate: Optional[str] = None  # How much it might tighten estimates
+    example: str | None = None  # Example of what good data looks like
+    impact_estimate: str | None = None  # How much it might tighten estimates
 
 
 def analyze_confidence_intervals(results: dict) -> list[ImprovementQuestion]:
@@ -342,7 +341,7 @@ def analyze_organic_baseline(results: dict) -> list[ImprovementQuestion]:
             why_it_helps="A very low organic baseline means the model thinks almost all conversions are media-driven. "
                         "This is unusual and could indicate the model is overcounting media impact. "
                         "Most businesses have a meaningful organic baseline from brand awareness, word of mouth, and direct traffic.",
-            example="If you paused all ads for a week, would conversions really drop by {:.0f}%? If not, the model may need informative priors.".format(media_pct),
+            example=f"If you paused all ads for a week, would conversions really drop by {media_pct:.0f}%? If not, the model may need informative priors.",
             impact_estimate="Calibration priors help anchor the organic baseline at a realistic level"
         ))
 
@@ -451,7 +450,6 @@ def analyze_prior_posterior_divergence(results: dict) -> list[ImprovementQuestio
             continue
 
         mean = data.get("mean", 0)
-        ci_lo = data.get("ci_lower", 0)
         ci_hi = data.get("ci_upper", 0)
 
         # ROI very close to zero despite likely having some effect
@@ -526,7 +524,7 @@ def format_questions_for_user(questions: list[ImprovementQuestion], max_question
 
         lines.append(f"\n{i}. {priority_marker} {q.question}")
         lines.append(f"   Category: {q.category}")
-        lines.append(f"\n   Why this helps:")
+        lines.append("\n   Why this helps:")
         lines.append(f"   {q.why_it_helps}")
 
         if q.example:

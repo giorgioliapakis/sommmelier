@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Run tests
+        run: uv run --frozen pytest -q
+      - name: Run semantic lint checks
+        run: uv run --frozen ruff check . --ignore E501
+      - name: Build package
+        run: uv build
+      - name: Smoke-test CLI
+        run: uv run --frozen sommmelier --help

@@ -1,10 +1,10 @@
 """Recommendation engine for Sommmelier."""
 
 from mmm.recommendations.engine import (
-    generate_analysis,
-    format_report_for_claude,
     AnalysisReport,
     Recommendation,
+    format_report_for_claude,
+    generate_analysis,
 )
 
 __all__ = [

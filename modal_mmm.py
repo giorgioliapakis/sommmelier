@@ -59,8 +59,8 @@ def fit_mmm(
     import warnings
     from datetime import datetime
 
-    import pandas as pd
     import numpy as np
+    import pandas as pd
 
     # Monkey-patch numpy 2.x compatibility for TFP
     # TFP uses np.reshape(x, newshape=...) but numpy 2.x changed it to shape=
@@ -76,7 +76,7 @@ def fit_mmm(
     warnings.filterwarnings('ignore')
 
     print(f"Starting MMM fit at {datetime.now()}")
-    print(f"GPU available: checking JAX devices...")
+    print("GPU available: checking JAX devices...")
 
     import jax
     print(f"JAX devices: {jax.devices()}")
@@ -124,8 +124,8 @@ def fit_mmm(
     print("InputData built successfully")
 
     # Configure model
-    from meridian.model import model, spec, prior_distribution
     import tensorflow_probability as tfp
+    from meridian.model import model, prior_distribution, spec
 
     # Auto-calculate knots
     n_periods = df['time'].nunique()

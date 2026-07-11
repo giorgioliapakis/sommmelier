@@ -6,9 +6,9 @@ from .calibration_data import (
     PlatformConversions,
     PriorBelief,
     calculate_channel_priors,
+    create_calibration_template,
     load_calibration,
     save_calibration,
-    create_calibration_template,
 )
 
 __all__ = [

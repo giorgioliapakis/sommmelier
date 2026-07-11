@@ -31,11 +31,11 @@ This update fixes those highest-risk issues and raises measured line coverage fr
 
 ### P1 — address before production use
 
-1. **Upgrade Meridian in an isolated compatibility branch.** The GPU image is pinned to Meridian 1.4.0 while the official changelog lists 1.6.2. The newer releases add EDA/data-adequacy checks, input guardrails, serialization, JAX support, and bug fixes. This code reaches into several version-sensitive analyzer and visualizer APIs, so a version bump should be followed by a real T4 smoke run and result-schema comparison rather than changed blindly. See the [official Meridian changelog](https://github.com/google/meridian/blob/main/CHANGELOG.md).
+1. **Keep Meridian compatibility tested.** The GPU image and package constraints now target Meridian 1.6.2. Every dependency bump should be followed by a real T4 smoke run and result-schema comparison because analyzer, visualizer, optimizer, and diagnostics objects are version-sensitive. See the [official Meridian changelog](https://github.com/google/meridian/blob/main/CHANGELOG.md).
 
-2. **Consolidate the three modeling paths.** `mmm/model/mmm.py`, `modal_mmm.py`, and `modal_mmm_full.py` have diverged. The full Modal runner is the de facto product, while the local wrapper exposes a different extraction and optimization contract. Move model preparation and result extraction into versioned package modules, leaving Modal as a thin compute adapter.
+2. **Finish consolidating the modeling paths.** Release-sensitive diagnostics, review, chart, and optimizer adapters are now shared, and the local optimizer uses the current Meridian contract. `modal_mmm.py` remains a divergent legacy runner and result extraction should move fully out of `modal_mmm_full.py`, leaving Modal as a thin compute adapter.
 
-3. **Test the paid GPU boundary.** Current tests cannot verify Meridian tensor dimensions, analyzer return schemas, R&F behavior, ModelReviewer parsing, optimizer results, or chart download against the live service. Add a manually triggered, budget-capped smoke workflow using the included Meridian sample.
+3. **Automate the paid GPU boundary.** Manual T4 smoke tests now verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. Add a manually triggered, budget-capped GitHub workflow using the included sample; keep it out of ordinary pull requests to avoid surprise spend.
 
 4. **Make calibration units explicit.** Experiment and platform conversion records are KPI-based, while user `PriorBelief` values are described as ROI. Add an explicit metric/unit field (`monetary_roi`, `incremental_kpi_per_currency`, or `cpik`) and reject calibration that does not match the fitted outcome scale.
 
@@ -43,29 +43,28 @@ This update fixes those highest-risk issues and raises measured line coverage fr
 
 ### P2 — next hardening pass
 
-1. Add CI for Python 3.11–3.13 with tests, Ruff, package build, and a minimal CLI smoke test.
-2. Add a lock or constraints file for reproducible local and Modal environments. `requirements.txt`, `pyproject.toml`, and the Modal image currently express different constraints.
-3. Raise coverage around `mmm/model/builder.py`, the recommendation/advisor modules, CLI commands, calibration serialization, and trend reporting. Overall coverage is now 41%, but the model builder is only 6% because Meridian is not installed in the local test environment.
-4. Replace pickle-based model persistence or clearly reject untrusted model files. `AutoMMM.load()` executes Python pickle deserialization and must never be used on files from another party.
-5. Add structured logging and run IDs across local and remote stages. The current print-based logs are hard to correlate and partial failures are difficult to query.
-6. Validate weekly cadence explicitly, not just gaps larger than two weeks. Irregular but gap-free dates can still violate the model's intended weekly granularity.
-7. Make population fallback opt-in. Assigning every unknown geography a population of 10 million can materially change geo scaling while looking valid.
-8. Make the configured quality gates real: the repository-wide Ruff check currently reports 200 issues, and strict mypy reports 97 errors. Changed files pass semantic Ruff checks, but CI should not claim full lint/type safety until the baseline is cleaned up.
+1. Raise coverage around `mmm/model/builder.py`, the recommendation/advisor modules, CLI commands, calibration serialization, and trend reporting. Overall coverage is now 41%, but the model builder is only 6% because Meridian is not installed in the local test environment.
+2. Replace pickle-based model persistence with Meridian's supported `save_mmm` and `load_mmm` APIs, and continue to reject untrusted model files because the underlying format is not a safe interchange format.
+3. Add structured logging and run IDs across local and remote stages. The current print-based logs are hard to correlate and partial failures are difficult to query.
+4. Validate weekly cadence explicitly, not just gaps larger than two weeks. Irregular but gap-free dates can still violate the model's intended weekly granularity.
+5. Make population fallback opt-in. Assigning every unknown geography a population of 10 million can materially change geo scaling while looking valid.
+6. Finish the configured quality gates. Repository-wide semantic Ruff checks now pass and run in CI, but 181 pre-existing line-length violations remain excluded and strict mypy still reports 97 errors.
 
 ## Verification performed
 
-- `python3 -m pytest -q`: 43 passed
+- `python3 -m pytest -q`: 49 passed
 - `python3 -m pytest -q --cov=mmm --cov-report=term-missing`: 41% total coverage
-- Ruff semantic checks on every changed Python file: passed (line-length excluded because the pre-existing codebase does not satisfy its configured 100-character limit)
+- Repository-wide Ruff semantic checks: passed (line-length is temporarily excluded because 181 pre-existing violations remain)
 - `python3 -m compileall`: passed
 - `git diff --check`: passed
 - CLI failure contract tested through Typer's runner
-- No paid Modal GPU run was launched during this audit
+- Live Meridian 1.6.2 T4 smoke: 10 distinct valid PNG charts, 3 populated optimizer scenarios, structured six-check ModelReviewer output, correct non-convergence status, local JSON, and HTML report
+- Locked dependency graph generated with uv; CI covers Python 3.11 and 3.12, tests, semantic Ruff, package build, and CLI startup
 
 ## Recommended build sequence
 
-1. Land this correctness and reliability hardening.
-2. Consolidate the modeling paths behind one result schema.
-3. Upgrade Meridian and run the budget-capped GPU compatibility suite.
-4. Add CI and dependency locking.
-5. Build the next product layer: a run manifest, explicit degraded-state reporting, and scenario planning that consumes only optimizer-backed allocations.
+1. Land the Meridian 1.6.2 compatibility adapters, lockfile, and CI.
+2. Retire the legacy Modal runner and consolidate model preparation and extraction behind one result schema.
+3. Build a run manifest with explicit failed/degraded/complete states.
+4. Make calibration units explicit and reject priors incompatible with the modeled outcome.
+5. Replace raw model persistence, tighten cadence/population safety, and continue the lint/type/coverage cleanup.

@@ -1,8 +1,8 @@
 """Model quality tracking for Sommmelier."""
 
 from mmm.tracking.model_quality import (
-    ModelQualityTracker,
     ModelMetrics,
+    ModelQualityTracker,
     update_tracking,
 )
 
