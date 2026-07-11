@@ -46,12 +46,24 @@ class DataConfig(BaseModel):
     kpi_column: str = Field(default="conversions", description="Primary KPI column")
 
     # Optional columns
-    revenue_column: str | None = Field(None, description="Revenue column if applicable")
+    revenue_column: str | None = Field(
+        None, description="Total revenue column used to derive revenue per KPI"
+    )
+    revenue_per_kpi_column: str | None = Field(
+        None, description="Revenue-per-KPI column, when already available"
+    )
     population_column: str | None = Field(None, description="Population column for geo scaling")
 
     # Media channels
     media_channels: list[MediaChannel] = Field(
         default_factory=list, description="List of media channel configurations"
+    )
+
+    organic_channels: list[OrganicMediaChannel] = Field(
+        default_factory=list, description="Organic media columns with adstock and saturation"
+    )
+    treatment_columns: list[str] = Field(
+        default_factory=list, description="Non-media treatment variable columns"
     )
 
     # Control variables

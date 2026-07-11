@@ -1,11 +1,18 @@
 """Data loading utilities for Sommmelier."""
 
-from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
-from mmm.data.schema import DataConfig, KPIData, MediaData, MMMDataset
+from mmm.data.schema import (
+    DataConfig,
+    KPIData,
+    MediaChannel,
+    MediaData,
+    MMMDataset,
+    OrganicMediaChannel,
+)
+from mmm.detection import detect_columns
 
 
 def load_csv(path: str | Path, **kwargs) -> pd.DataFrame:
@@ -128,9 +135,15 @@ def load_mmm_data(
     """
     if config is None:
         config = DataConfig()
+    else:
+        # Detection fills empty configuration fields. Do not mutate a caller-owned model.
+        config = config.model_copy(deep=True)
 
-    df = load_csv(path, parse_dates=[config.date_column])
-    df[config.date_column] = pd.to_datetime(df[config.date_column])
+    df = load_csv(path)
+    if config.date_column not in df.columns and config.date_column == "date" and "time" in df.columns:
+        config.date_column = "time"
+    if config.date_column in df.columns:
+        df[config.date_column] = pd.to_datetime(df[config.date_column], errors="raise")
 
     # Validate required columns exist
     required_cols = [config.date_column, config.geo_column, config.kpi_column]
@@ -138,58 +151,41 @@ def load_mmm_data(
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
+    detected = detect_columns(df.columns)
+
     # Auto-detect media channels if not provided
     if not config.media_channels:
-        spend_cols = [col for col in df.columns if "_spend" in col.lower()]
-        for spend_col in spend_cols:
-            channel_name = spend_col.replace("_spend", "").replace("_Spend", "")
+        config.media_channels = [MediaChannel(**channel) for channel in detected.media_channels]
 
-            # Check for reach+frequency columns
-            reach_col = None
-            frequency_col = None
-            for suffix in ["_reach"]:
-                potential = channel_name + suffix
-                if potential in df.columns:
-                    reach_col = potential
-            for suffix in ["_frequency"]:
-                potential = channel_name + suffix
-                if potential in df.columns:
-                    frequency_col = potential
+    if not config.organic_channels:
+        config.organic_channels = [
+            OrganicMediaChannel(name=column[: -len("_organic")], column=column)
+            for column in detected.organic_columns
+        ]
 
-            # Check for impressions column
-            impressions_col = None
-            for suffix in ["_impressions", "_imps", "_Impressions"]:
-                potential_col = channel_name + suffix
-                if potential_col in df.columns:
-                    impressions_col = potential_col
-                    break
+    if not config.treatment_columns:
+        config.treatment_columns = list(detected.treatment_columns)
 
-            config.media_channels.append(
-                {
-                    "name": channel_name,
-                    "spend_column": spend_col,
-                    "impressions_column": impressions_col,
-                    "reach_column": reach_col,
-                    "frequency_column": frequency_col,
-                }
-            )
-
-    # Auto-detect organic media columns (suffix: _organic)
     if not config.control_columns:
-        # Also populate control columns if not already set
-        control_candidates = [col for col in df.columns if "_control" in col.lower()]
-        config.control_columns = control_candidates
+        config.control_columns = list(detected.control_columns)
+
+    if config.revenue_per_kpi_column is None:
+        for candidate in ("revenue_per_kpi", "revenue_per_conversion"):
+            if candidate in df.columns:
+                config.revenue_per_kpi_column = candidate
+                break
+    if config.revenue_column is None and "revenue" in df.columns:
+        config.revenue_column = "revenue"
 
     # Extract metadata
     date_range = (df[config.date_column].min().date(), df[config.date_column].max().date())
     geos = df[config.geo_column].unique().tolist()
     n_time_periods = df[config.date_column].nunique()
-    media_channel_names = [ch["name"] if isinstance(ch, dict) else ch.name for ch in config.media_channels]
+    media_channel_names = [channel.name for channel in config.media_channels]
 
     # Calculate totals
     spend_cols = [
-        ch["spend_column"] if isinstance(ch, dict) else ch.spend_column
-        for ch in config.media_channels
+        channel.spend_column for channel in config.media_channels
     ]
     total_spend = df[spend_cols].sum().sum()
     total_kpi = df[config.kpi_column].sum()

@@ -9,13 +9,10 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from .improvement_advisor import (
     ImprovementQuestion,
     generate_improvement_questions,
-    format_questions_for_user,
-    format_questions_as_checklist,
 )
 
 
@@ -27,7 +24,7 @@ class Recommendation:
     title: str
     detail: str
     action: str
-    impact: Optional[str] = None  # Estimated impact if known
+    impact: str | None = None  # Estimated impact if known
 
 
 @dataclass
@@ -72,6 +69,7 @@ def analyze_roi(results: dict) -> list[Recommendation]:
     """Analyze ROI and generate recommendations."""
     recommendations = []
     roi_data = results.get("roi", {})
+    roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
 
     if not roi_data:
         # Handle simple format
@@ -82,6 +80,24 @@ def analyze_roi(results: dict) -> list[Recommendation]:
 
     if not roi_data:
         return recommendations
+
+    if not roi_is_monetary:
+        return [
+            Recommendation(
+                category="data",
+                priority="high",
+                title="ROI is currently a KPI-efficiency metric, not a monetary return",
+                detail=(
+                    "No revenue-per-KPI data was supplied, so Meridian reports incremental "
+                    "KPI units per currency unit spent. Breakeven thresholds do not apply."
+                ),
+                action=(
+                    "Add a revenue, revenue_per_kpi, or revenue_per_conversion column for "
+                    "monetary ROI; until then, make decisions with CPIK and uncertainty ranges."
+                ),
+                impact="Prevents non-monetary efficiency from being mistaken for profitability",
+            )
+        ]
 
     # Sort channels by ROI
     sorted_channels = sorted(
@@ -295,7 +311,7 @@ def analyze_model_quality(results: dict) -> tuple[dict, list[Recommendation]]:
 
 
 def calculate_budget_reallocation(results: dict) -> dict:
-    """Calculate suggested budget reallocation based on marginal ROI."""
+    """Use Meridian's fitted optimizer output for a same-budget reallocation."""
     reallocation = {
         "current": {},
         "suggested": {},
@@ -303,27 +319,21 @@ def calculate_budget_reallocation(results: dict) -> dict:
     }
 
     metadata = results.get("metadata", {})
-    mroi_data = results.get("marginal_roi", {})
     current_spend = metadata.get("total_spend", {})
+    optimized = (
+        results.get("optimization", {})
+        .get("current", {})
+        .get("optimal_allocation", {})
+    )
 
-    if not mroi_data or not current_spend:
+    if not optimized or not current_spend:
         return reallocation
 
     reallocation["current"] = dict(current_spend)
-
-    # Simple reallocation: shift budget proportional to marginal ROI
-    total_spend = sum(current_spend.values())
-    total_mroi = sum(mroi_data.values())
-
-    if total_mroi == 0:
-        return reallocation
-
-    for ch in current_spend:
-        mroi = mroi_data.get(ch, 0)
-        # Allocate proportional to marginal ROI
-        suggested = total_spend * (mroi / total_mroi)
+    for ch, current in current_spend.items():
+        suggested = float(optimized.get(ch, current))
         reallocation["suggested"][ch] = round(suggested, 2)
-        reallocation["change"][ch] = round(suggested - current_spend[ch], 2)
+        reallocation["change"][ch] = round(suggested - current, 2)
 
     return reallocation
 

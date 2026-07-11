@@ -8,7 +8,6 @@ and prior beliefs to improve model accuracy.
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -31,12 +30,12 @@ class ExperimentResult:
     channel: str
     experiment_type: str  # "geo_lift", "holdout", "synthetic_control", "rct"
     lift_estimate: float  # Incremental lift as decimal (0.12 = 12%)
-    lift_ci_lower: Optional[float] = None
-    lift_ci_upper: Optional[float] = None
-    test_period_weeks: Optional[int] = None
-    test_spend: Optional[float] = None
-    test_conversions: Optional[float] = None
-    notes: Optional[str] = None
+    lift_ci_lower: float | None = None
+    lift_ci_upper: float | None = None
+    test_period_weeks: int | None = None
+    test_spend: float | None = None
+    test_conversions: float | None = None
+    notes: str | None = None
 
 
 @dataclass
@@ -60,8 +59,8 @@ class PlatformConversions:
     platform_conversions: float
     period_weeks: int
     spend: float
-    attribution_window: Optional[str] = None  # e.g., "7d_click_1d_view"
-    notes: Optional[str] = None
+    attribution_window: str | None = None  # e.g., "7d_click_1d_view"
+    notes: str | None = None
 
 
 @dataclass
@@ -82,7 +81,7 @@ class PriorBelief:
     expected_roi_low: float
     expected_roi_high: float
     confidence: str = "medium"  # "high", "medium", "low"
-    source: Optional[str] = None  # Where this belief comes from
+    source: str | None = None  # Where this belief comes from
 
 
 @dataclass
@@ -114,11 +113,11 @@ def experiment_to_prior(exp: ExperimentResult) -> dict:
         # lift_estimate * total = incremental conversions
         incremental = exp.lift_estimate * exp.test_conversions
         implied_roi = incremental / exp.test_spend
-    elif exp.test_spend and exp.test_spend > 0:
-        # No conversion count — use lift as rough proxy
-        implied_roi = exp.lift_estimate
     else:
-        implied_roi = exp.lift_estimate
+        raise ValueError(
+            f"Experiment calibration for '{exp.channel}' requires positive "
+            "test_conversions and test_spend; lift alone is not an ROI."
+        )
 
     # Clamp to avoid log(0)
     implied_roi = max(implied_roi, 1e-8)
@@ -154,7 +153,9 @@ def platform_data_to_upper_bound(platform: PlatformConversions) -> dict:
 
     Platform-reported conversions are typically 2-5x over-attributed.
     """
-    platform_roi = platform.platform_conversions / platform.spend if platform.spend > 0 else 0
+    if platform.spend <= 0:
+        raise ValueError(f"Platform calibration for '{platform.channel}' requires positive spend")
+    platform_roi = platform.platform_conversions / platform.spend
 
     # Platform data is an upper bound - true ROI is likely 30-70% of this
     return {
@@ -196,6 +197,8 @@ def calculate_channel_priors(calibration: CalibrationData) -> dict[str, dict]:
 
     Priority: Experiments > Platform data > Prior beliefs > Default
     """
+    import math
+
     channel_priors = {}
 
     # Start with prior beliefs (lowest priority)
@@ -210,14 +213,17 @@ def calculate_channel_priors(calibration: CalibrationData) -> dict[str, dict]:
         if ch in channel_priors:
             # Constrain existing prior by upper bound
             current = channel_priors[ch]
-            suggested_mean = (bounds["suggested_roi_range"][0] + bounds["suggested_roi_range"][1]) / 2
-            # Average with existing belief
-            current["roi_mean"] = (current["roi_mean"] + suggested_mean) / 2
+            suggested_mean = (
+                bounds["suggested_roi_range"][0] + bounds["suggested_roi_range"][1]
+            ) / 2
+            # roi_mean is the location of a LogNormal, so combine in log-space.
+            suggested_log_mean = math.log(max(suggested_mean, 1e-8))
+            current["roi_mean"] = (current["roi_mean"] + suggested_log_mean) / 2
             current["platform_upper_bound"] = bounds["roi_upper_bound"]
         else:
             channel_priors[ch] = {
                 "channel": ch,
-                "roi_mean": bounds["suggested_roi_range"][1],  # Conservative
+                "roi_mean": math.log(max(bounds["suggested_roi_range"][1], 1e-8)),
                 "roi_sigma": 0.7,  # Moderate uncertainty
                 "platform_upper_bound": bounds["roi_upper_bound"],
                 "source": bounds["source"]
@@ -225,11 +231,16 @@ def calculate_channel_priors(calibration: CalibrationData) -> dict[str, dict]:
 
     # Layer in experiments (highest priority) — average multiple per channel
     from collections import defaultdict
-    import math
 
     channel_experiments = defaultdict(list)
     for exp in calibration.experiments:
-        channel_experiments[exp.channel].append(experiment_to_prior(exp))
+        try:
+            prior = experiment_to_prior(exp)
+        except ValueError:
+            # Keep incomplete lift-only records as provenance, but never turn
+            # them into a dimensionally invalid ROI prior.
+            continue
+        channel_experiments[exp.channel].append(prior)
 
     for channel, priors in channel_experiments.items():
         # Average log-space means across experiments
