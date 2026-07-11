@@ -66,6 +66,7 @@ def _builder_modules(calls):
 
         def __getattr__(self, name):
             if name.startswith("with_"):
+
                 def method(*args, **kwargs):
                     calls.append((name, kwargs))
                     return self

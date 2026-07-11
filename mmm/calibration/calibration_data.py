@@ -8,7 +8,7 @@ and prior beliefs to improve model accuracy.
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 CalibrationMetric = Literal["monetary_roi", "incremental_kpi_per_currency"]
 
@@ -41,6 +41,7 @@ class ExperimentResult:
             notes="Ran in CA, OR, WA vs control in TX, FL, GA"
         )
     """
+
     channel: str
     experiment_type: str  # "geo_lift", "holdout", "synthetic_control", "rct"
     lift_estimate: float  # Incremental lift as decimal (0.12 = 12%)
@@ -81,6 +82,7 @@ class PlatformConversions:
             notes="From Meta Ads Manager, last 28 days"
         )
     """
+
     channel: str
     platform_conversions: float
     period_weeks: int
@@ -112,6 +114,7 @@ class PriorBelief:
             source="Historical data from 2023"
         )
     """
+
     channel: str
     expected_roi_low: float
     expected_roi_high: float
@@ -134,22 +137,22 @@ class CalibrationData:
 
     Collect all available calibration information in one place.
     """
+
     experiments: list[ExperimentResult] = field(default_factory=list)
     platform_conversions: list[PlatformConversions] = field(default_factory=list)
     prior_beliefs: list[PriorBelief] = field(default_factory=list)
-    control_variables: dict = field(default_factory=dict)  # {column_name: description}
+    control_variables: dict[str, str] = field(default_factory=dict)
     notes: str = ""
 
 
 def _validate_metric(metric: str) -> None:
     if metric not in {"monetary_roi", "incremental_kpi_per_currency"}:
         raise ValueError(
-            "Calibration metric must be 'monetary_roi' or "
-            "'incremental_kpi_per_currency'"
+            "Calibration metric must be 'monetary_roi' or 'incremental_kpi_per_currency'"
         )
 
 
-def experiment_to_prior(exp: ExperimentResult) -> dict:
+def experiment_to_prior(exp: ExperimentResult) -> dict[str, Any]:
     """
     Convert experiment result to Meridian prior parameters.
 
@@ -177,8 +180,13 @@ def experiment_to_prior(exp: ExperimentResult) -> dict:
     log_roi = math.log(implied_roi)
 
     # Calculate sigma from CI if available
-    if (exp.lift_ci_lower is not None and exp.lift_ci_upper is not None
-            and exp.test_conversions and exp.test_spend and exp.test_spend > 0):
+    if (
+        exp.lift_ci_lower is not None
+        and exp.lift_ci_upper is not None
+        and exp.test_conversions
+        and exp.test_spend
+        and exp.test_spend > 0
+    ):
         roi_lower = max(exp.lift_ci_lower * exp.test_conversions / exp.test_spend, 1e-8)
         roi_upper = max(exp.lift_ci_upper * exp.test_conversions / exp.test_spend, 1e-8)
         # 90% CI spans ~3.29 sigma in log-space
@@ -195,11 +203,11 @@ def experiment_to_prior(exp: ExperimentResult) -> dict:
         "metric": exp.metric,
         "roi_mean": log_roi,
         "roi_sigma": sigma,
-        "source": f"experiment:{exp.experiment_type}"
+        "source": f"experiment:{exp.experiment_type}",
     }
 
 
-def platform_data_to_upper_bound(platform: PlatformConversions) -> dict:
+def platform_data_to_upper_bound(platform: PlatformConversions) -> dict[str, Any]:
     """
     Convert platform data to a soft upper bound on ROI.
 
@@ -215,11 +223,11 @@ def platform_data_to_upper_bound(platform: PlatformConversions) -> dict:
         "metric": platform.metric,
         "roi_upper_bound": platform_roi,
         "suggested_roi_range": (platform_roi * 0.3, platform_roi * 0.7),
-        "source": f"platform:{platform.attribution_window or 'default'}"
+        "source": f"platform:{platform.attribution_window or 'default'}",
     }
 
 
-def belief_to_prior(belief: PriorBelief) -> dict:
+def belief_to_prior(belief: PriorBelief) -> dict[str, Any]:
     """
     Convert user belief to Meridian prior parameters (log-space).
     """
@@ -230,7 +238,9 @@ def belief_to_prior(belief: PriorBelief) -> dict:
     log_roi = math.log(max(roi_mid, 1e-8))
 
     # Sigma from range width in log-space
-    log_range = math.log(max(belief.expected_roi_high, 1e-8)) - math.log(max(belief.expected_roi_low, 1e-8))
+    log_range = math.log(max(belief.expected_roi_high, 1e-8)) - math.log(
+        max(belief.expected_roi_low, 1e-8)
+    )
 
     # Adjust sigma based on confidence
     confidence_multiplier = {"high": 0.5, "medium": 1.0, "low": 2.0}.get(belief.confidence, 1.0)
@@ -241,7 +251,7 @@ def belief_to_prior(belief: PriorBelief) -> dict:
         "metric": belief.metric,
         "roi_mean": log_roi,
         "roi_sigma": sigma,
-        "source": f"belief:{belief.source or 'user_input'}"
+        "source": f"belief:{belief.source or 'user_input'}",
     }
 
 
@@ -249,7 +259,7 @@ def calculate_channel_priors(
     calibration: CalibrationData,
     *,
     expected_metric: CalibrationMetric | None = None,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, Any]]:
     """
     Combine all calibration data to compute per-channel priors.
 
@@ -266,8 +276,7 @@ def calculate_channel_priors(
     supported_metrics = {"monetary_roi", "incremental_kpi_per_currency"}
     if not metrics.issubset(supported_metrics):
         raise ValueError(
-            "Unsupported calibration metric(s): "
-            + ", ".join(sorted(metrics - supported_metrics))
+            "Unsupported calibration metric(s): " + ", ".join(sorted(metrics - supported_metrics))
         )
     if len(metrics) > 1:
         raise ValueError(
@@ -308,7 +317,7 @@ def calculate_channel_priors(
                 "roi_mean": math.log(max(bounds["suggested_roi_range"][1], 1e-8)),
                 "roi_sigma": 0.7,  # Moderate uncertainty
                 "platform_upper_bound": bounds["roi_upper_bound"],
-                "source": bounds["source"]
+                "source": bounds["source"],
             }
 
     # Layer in experiments (highest priority) — average multiple per channel
@@ -333,7 +342,7 @@ def calculate_channel_priors(
         if len(priors) > 1:
             means = [p["roi_mean"] for p in priors]
             inter_variance = sum((m - avg_mean) ** 2 for m in means) / (len(means) - 1)
-            combined_sigma = math.sqrt(avg_intra_sigma ** 2 + inter_variance)
+            combined_sigma = math.sqrt(avg_intra_sigma**2 + inter_variance)
         else:
             combined_sigma = avg_intra_sigma
 
@@ -345,7 +354,7 @@ def calculate_channel_priors(
             "metric": priors[0]["metric"],
             "roi_mean": avg_mean,
             "roi_sigma": combined_sigma,
-            "source": f"experiment:averaged({len(priors)})"
+            "source": f"experiment:averaged({len(priors)})",
         }
 
     return channel_priors
@@ -367,7 +376,7 @@ def save_calibration(calibration: CalibrationData, path: Path | str) -> None:
                 "test_period_weeks": e.test_period_weeks,
                 "test_spend": e.test_spend,
                 "test_conversions": e.test_conversions,
-                "notes": e.notes
+                "notes": e.notes,
             }
             for e in calibration.experiments
         ],
@@ -379,7 +388,7 @@ def save_calibration(calibration: CalibrationData, path: Path | str) -> None:
                 "spend": p.spend,
                 "metric": p.metric,
                 "attribution_window": p.attribution_window,
-                "notes": p.notes
+                "notes": p.notes,
             }
             for p in calibration.platform_conversions
         ],
@@ -390,12 +399,12 @@ def save_calibration(calibration: CalibrationData, path: Path | str) -> None:
                 "expected_roi_high": b.expected_roi_high,
                 "metric": b.metric,
                 "confidence": b.confidence,
-                "source": b.source
+                "source": b.source,
             }
             for b in calibration.prior_beliefs
         ],
         "control_variables": calibration.control_variables,
-        "notes": calibration.notes
+        "notes": calibration.notes,
     }
 
     with open(path, "w") as f:

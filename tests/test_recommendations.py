@@ -1,6 +1,15 @@
 """Tests for recommendation safety and optimizer handoff."""
 
-from mmm.recommendations.engine import analyze_roi, calculate_budget_reallocation
+import json
+
+import pytest
+
+from mmm.recommendations.engine import (
+    analyze_roi,
+    calculate_budget_reallocation,
+    generate_analysis,
+)
+from mmm.recommendations.improvement_advisor import generate_improvement_questions
 
 
 def test_non_monetary_roi_is_not_compared_to_breakeven():
@@ -42,3 +51,31 @@ def test_budget_reallocation_does_not_invent_allocation_without_optimizer():
     )
 
     assert result["suggested"] == {}
+
+
+def test_library_analysis_blocks_non_decision_ready_results(tmp_path):
+    path = tmp_path / "results.json"
+    path.write_text(
+        json.dumps(
+            {
+                "run_manifest": {
+                    "status": "complete",
+                    "quality_status": "failed",
+                }
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="Recommendations blocked"):
+        generate_analysis(path, tmp_path)
+
+
+def test_impression_question_only_appears_when_fallback_was_used():
+    base = {"metadata": {"estimated_impression_channels": []}}
+    with_real_execution = generate_improvement_questions(base)
+    with_estimate = generate_improvement_questions(
+        {"metadata": {"estimated_impression_channels": ["meta"]}}
+    )
+
+    assert not any("impression data" in question.question for question in with_real_execution)
+    assert any("impression data" in question.question for question in with_estimate)

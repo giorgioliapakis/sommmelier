@@ -54,6 +54,7 @@ class ModelResults:
     # Channel contributions
     channel_contributions: dict[str, float] = field(default_factory=dict)
     channel_roi: dict[str, float] = field(default_factory=dict)
+    roi_is_monetary: bool = False
 
     # Diagnostics
     convergence_passed: bool = False
@@ -80,16 +81,19 @@ class ModelResults:
             if self.r_hat_max is not None
             else "  Max R-hat: N/A",
             "",
-            "Channel ROI:",
+            "Channel ROI:" if self.roi_is_monetary else "Channel KPI Efficiency:",
         ]
 
         for channel, roi in sorted(self.channel_roi.items(), key=lambda x: -x[1]):
-            lines.append(f"  {channel}: {roi:.2f}x")
+            unit = "x" if self.roi_is_monetary else " KPI/currency"
+            lines.append(f"  {channel}: {roi:.2f}{unit}")
 
-        lines.extend([
-            "",
-            "Channel Contribution to KPI:",
-        ])
+        lines.extend(
+            [
+                "",
+                "Channel Contribution to KPI:",
+            ]
+        )
 
         total_contrib = sum(self.channel_contributions.values())
         for channel, contrib in sorted(self.channel_contributions.items(), key=lambda x: -x[1]):
@@ -125,7 +129,7 @@ class AutoMMM:
 
     def prepare(
         self,
-        calibration_priors: dict[str, dict] | None = None,
+        calibration_priors: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Prepare the model for fitting (build InputData, initialize Meridian).
 
@@ -190,7 +194,7 @@ class AutoMMM:
     def fit(
         self,
         sample_prior: bool = True,
-        calibration_priors: dict[str, dict] | None = None,
+        calibration_priors: dict[str, dict[str, Any]] | None = None,
     ) -> ModelResults:
         """
         Fit the MMM model.
@@ -234,6 +238,11 @@ class AutoMMM:
 
         mmm_analyzer = analyzer.Analyzer(self._meridian)
         results = ModelResults(meridian_model=self._meridian)
+        results.roi_is_monetary = bool(
+            self.dataset.config.kpi_type == "revenue"
+            or self.dataset.config.revenue_per_kpi_column
+            or self.dataset.config.revenue_column
+        )
 
         roi = summarize_channel_tensor(
             mmm_analyzer.roi(use_posterior=True), self.dataset.media_channels
@@ -396,9 +405,7 @@ class AutoMMM:
 
         metadata = json.loads((path / "metadata.json").read_text())
         if metadata.get("schema_version") != 1:
-            raise ValueError(
-                f"Unsupported model bundle schema: {metadata.get('schema_version')}"
-            )
+            raise ValueError(f"Unsupported model bundle schema: {metadata.get('schema_version')}")
 
         dataset_data = metadata["dataset"]
         date_values = dataset_data["date_range"]
@@ -423,9 +430,7 @@ class AutoMMM:
         model_config_data["output_dir"] = Path(model_config_data["output_dir"])
         instance = cls(dataset, ModelConfig(**model_config_data))
         instance._meridian = meridian_serde.load_meridian(str(path / "model.binpb"))
-        instance._results = ModelResults(
-            **metadata["results"], meridian_model=instance._meridian
-        )
+        instance._results = ModelResults(**metadata["results"], meridian_model=instance._meridian)
 
         return instance
 

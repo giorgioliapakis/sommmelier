@@ -1,6 +1,7 @@
 """Data loading utilities for Sommmelier."""
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -15,20 +16,22 @@ from mmm.data.schema import (
 from mmm.detection import detect_columns
 
 
-def load_csv(path: str | Path, **kwargs) -> pd.DataFrame:
+def load_csv(path: str | Path, **kwargs: Any) -> pd.DataFrame:
     """Load a CSV file into a DataFrame."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
-    return pd.read_csv(path, **kwargs)
+    frame: pd.DataFrame = pd.read_csv(path, **kwargs)
+    return frame
 
 
-def load_parquet(path: str | Path, **kwargs) -> pd.DataFrame:
+def load_parquet(path: str | Path, **kwargs: Any) -> pd.DataFrame:
     """Load a Parquet file into a DataFrame."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
-    return pd.read_parquet(path, **kwargs)
+    frame: pd.DataFrame = pd.read_parquet(path, **kwargs)
+    return frame
 
 
 def load_media_data(
@@ -140,7 +143,11 @@ def load_mmm_data(
         config = config.model_copy(deep=True)
 
     df = load_csv(path)
-    if config.date_column not in df.columns and config.date_column == "date" and "time" in df.columns:
+    if (
+        config.date_column not in df.columns
+        and config.date_column == "date"
+        and "time" in df.columns
+    ):
         config.date_column = "time"
     if config.date_column in df.columns:
         df[config.date_column] = pd.to_datetime(df[config.date_column], errors="raise")
@@ -188,9 +195,7 @@ def load_mmm_data(
     media_channel_names = [channel.name for channel in config.media_channels]
 
     # Calculate totals
-    spend_cols = [
-        channel.spend_column for channel in config.media_channels
-    ]
+    spend_cols = [channel.spend_column for channel in config.media_channels]
     total_spend = df[spend_cols].sum().sum()
     total_kpi = df[config.kpi_column].sum()
 

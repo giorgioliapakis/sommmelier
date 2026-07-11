@@ -22,13 +22,11 @@ from pathlib import Path
 from mmm.result_manifest import decision_readiness as evaluate_decision_readiness
 
 
-def run_command(
-    cmd: list[str], description: str, timeout_seconds: int = 7200
-) -> tuple[bool, str]:
+def run_command(cmd: list[str], description: str, timeout_seconds: int = 7200) -> tuple[bool, str]:
     """Run a command and return success status and output."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"STEP: {description}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     try:
         result = subprocess.run(
@@ -87,9 +85,9 @@ def main():
     }
 
     # Step 1: Validate data locally
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STEP: Validating data")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     try:
         from mmm.data import load_mmm_data, validate_dataset
@@ -149,10 +147,7 @@ def main():
         outputs_dir.glob("results_*.json")
     )
     modal_cmd = ["modal", "run", "modal_mmm_full.py", "--data", str(data_file)] + calibration_args
-    success, output = run_command(
-        modal_cmd,
-        "Running MMM model on Modal GPU"
-    )
+    success, output = run_command(modal_cmd, "Running MMM model on Modal GPU")
     results["steps"]["mmm_fit"] = {"success": success}
 
     if not success:
@@ -168,6 +163,8 @@ def main():
 
     results["results_file"] = str(results_file)
     print(f"\nResults saved to: {results_file}")
+    result_payload = json.loads(results_file.read_text())
+    results["run_id"] = result_payload.get("run_manifest", {}).get("run_id")
     decision_ready, readiness_reason = decision_readiness(results_file)
     results["decision_ready"] = decision_ready
     results["readiness_reason"] = readiness_reason
@@ -175,7 +172,7 @@ def main():
     # Step 4: Generate HTML report (via CLI)
     success, output = run_command(
         [sys.executable, "-m", "mmm.cli.main", "report", str(results_file)],
-        "Generating HTML report"
+        "Generating HTML report",
     )
     results["steps"]["report"] = {"success": success}
 
@@ -208,12 +205,13 @@ def main():
         results["analysis_file"] = str(analysis_file)
 
     # Step 6: Update model quality tracking
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STEP: Updating model quality tracking")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     try:
         sys.path.insert(0, str(Path(__file__).parent))
         from mmm.tracking import update_tracking
+
         quality_report = update_tracking(results_file, str(data_file))
         print(quality_report)
 

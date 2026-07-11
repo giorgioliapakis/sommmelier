@@ -106,7 +106,9 @@ def validate_dataset(dataset: MMMDataset) -> ValidationReport:
     )
 
     expected_rows = dataset.n_geos * dataset.n_time_periods
-    missing_panel_rows = max(expected_rows - len(df.drop_duplicates([config.geo_column, config.date_column])), 0)
+    missing_panel_rows = max(
+        expected_rows - len(df.drop_duplicates([config.geo_column, config.date_column])), 0
+    )
     add_result(
         missing_panel_rows == 0,
         "Balanced Geo-Time Panel",
@@ -258,9 +260,7 @@ def validate_dataset(dataset: MMMDataset) -> ValidationReport:
     if auxiliary_columns:
         missing_auxiliary = int(df[auxiliary_columns].isna().sum().sum())
         numeric_auxiliary = [
-            column
-            for column in auxiliary_columns
-            if pd.api.types.is_numeric_dtype(df[column])
+            column for column in auxiliary_columns if pd.api.types.is_numeric_dtype(df[column])
         ]
         add_result(
             len(numeric_auxiliary) == len(auxiliary_columns),
@@ -278,9 +278,7 @@ def validate_dataset(dataset: MMMDataset) -> ValidationReport:
             else f"{missing_auxiliary} missing values found in additional model inputs",
         )
         if numeric_auxiliary:
-            non_finite_auxiliary = int(
-                (~np.isfinite(df[numeric_auxiliary].dropna())).sum().sum()
-            )
+            non_finite_auxiliary = int((~np.isfinite(df[numeric_auxiliary].dropna())).sum().sum())
             add_result(
                 non_finite_auxiliary == 0,
                 "Additional Input Finite Values",
@@ -356,9 +354,7 @@ def validate_dataset(dataset: MMMDataset) -> ValidationReport:
         else "Non-weekly gaps found (days): " + ", ".join(map(str, irregular_cadence)),
     )
 
-    population_available = bool(
-        config.population_column and config.population_column in df.columns
-    )
+    population_available = bool(config.population_column and config.population_column in df.columns)
     add_result(
         population_available or config.allow_population_estimates,
         "Population Data",

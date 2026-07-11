@@ -9,13 +9,18 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
 class ModelMetrics:
     """Metrics for a single model run."""
+
     timestamp: str
     data_file: str
+    run_id: str = "unknown"
+    technical_status: str = "unknown"
+    quality_status: str = "unknown"
 
     # Predictive accuracy
     r_squared: float | None = None
@@ -35,12 +40,13 @@ class ModelMetrics:
     avg_roi_ci_width: float | None = None
 
 
-def extract_metrics_from_results(results: dict, data_file: str = "") -> ModelMetrics:
+def extract_metrics_from_results(results: dict[str, Any], data_file: str = "") -> ModelMetrics:
     """Extract model metrics from results JSON."""
     metadata = results.get("metadata", {})
     diagnostics = results.get("diagnostics", {})
     model_fit = results.get("model_fit", {})
     roi_data = results.get("roi", {})
+    manifest = results.get("run_manifest", {})
 
     # Calculate average CI width
     ci_widths = []
@@ -57,13 +63,16 @@ def extract_metrics_from_results(results: dict, data_file: str = "") -> ModelMet
     return ModelMetrics(
         timestamp=results.get("timestamp", datetime.now().isoformat()),
         data_file=data_file,
+        run_id=manifest.get("run_id", "unknown"),
+        technical_status=manifest.get("status", "unknown"),
+        quality_status=manifest.get("quality_status", "unknown"),
         r_squared=model_fit.get("r_squared"),
         mape=model_fit.get("mape"),
         wmape=model_fit.get("wmape"),
         n_time_periods=metadata.get("n_time_periods", 0),
         n_geos=metadata.get("n_geos", 0),
         n_channels=len(metadata.get("channels", [])),
-        convergence_ok=diagnostics.get("convergence_ok", True),
+        convergence_ok=diagnostics.get("convergence_ok", False),
         rhat_warnings=diagnostics.get("rhat_warnings", 0),
         avg_roi_ci_width=avg_ci_width,
     )
@@ -74,10 +83,10 @@ class ModelQualityTracker:
 
     def __init__(self, tracking_file: Path | str = "outputs/model_quality_history.json"):
         self.tracking_file = Path(tracking_file)
-        self.history: list[dict] = []
+        self.history: list[dict[str, Any]] = []
         self._load()
 
-    def _load(self):
+    def _load(self) -> None:
         """Load history from file."""
         if self.tracking_file.exists():
             try:
@@ -93,7 +102,7 @@ class ModelQualityTracker:
                 )
             self.history = history
 
-    def _save(self):
+    def _save(self) -> None:
         """Save history atomically so interruption cannot erase prior runs."""
         self.tracking_file.parent.mkdir(parents=True, exist_ok=True)
         temporary_file = self.tracking_file.with_suffix(self.tracking_file.suffix + ".tmp")
@@ -102,23 +111,25 @@ class ModelQualityTracker:
             f.flush()
         temporary_file.replace(self.tracking_file)
 
-    def add_run(self, metrics: ModelMetrics):
+    def add_run(self, metrics: ModelMetrics) -> None:
         """Add a new run to history."""
         self.history.append(asdict(metrics))
         self._save()
 
-    def get_trend(self, metric: str, n_runs: int = 5) -> dict:
+    def get_trend(self, metric: str, n_runs: int = 5) -> dict[str, Any]:
         """Get trend for a metric over recent runs."""
         recent = self.history[-n_runs:] if len(self.history) >= n_runs else self.history
 
-        values = [r.get(metric) for r in recent if r.get(metric) is not None]
+        values = [
+            float(value) for run in recent if isinstance((value := run.get(metric)), (int, float))
+        ]
 
         if len(values) < 2:
             return {"trend": "insufficient_data", "values": values}
 
         # Calculate trend
-        first_half = values[:len(values)//2]
-        second_half = values[len(values)//2:]
+        first_half = values[: len(values) // 2]
+        second_half = values[len(values) // 2 :]
 
         first_avg = sum(first_half) / len(first_half)
         second_avg = sum(second_half) / len(second_half)
@@ -160,6 +171,12 @@ class ModelQualityTracker:
 
         latest = self.history[-1]
         lines.append(f"\nLatest run: {latest.get('timestamp', 'Unknown')}")
+        lines.append(f"Run ID: {latest.get('run_id', 'Unknown')}")
+        lines.append(
+            "Run status: "
+            f"{latest.get('technical_status', 'unknown')} / "
+            f"quality {latest.get('quality_status', 'unknown')}"
+        )
         lines.append(f"Data periods: {latest.get('n_time_periods', 'N/A')}")
 
         # Current metrics
@@ -172,13 +189,23 @@ class ModelQualityTracker:
         wmape = latest.get("wmape")
 
         if r2 is not None:
-            quality = "Excellent" if r2 > 0.9 else "Good" if r2 > 0.7 else "Fair" if r2 > 0.5 else "Poor"
+            quality = (
+                "Excellent" if r2 > 0.9 else "Good" if r2 > 0.7 else "Fair" if r2 > 0.5 else "Poor"
+            )
             lines.append(f"  R-squared: {r2:.3f} ({quality})")
         else:
             lines.append("  R-squared: Not available")
 
         if mape is not None:
-            quality = "Excellent" if mape < 0.1 else "Good" if mape < 0.2 else "Fair" if mape < 0.3 else "Poor"
+            quality = (
+                "Excellent"
+                if mape < 0.1
+                else "Good"
+                if mape < 0.2
+                else "Fair"
+                if mape < 0.3
+                else "Poor"
+            )
             lines.append(f"  MAPE: {mape:.1%} ({quality})")
         else:
             lines.append("  MAPE: Not available")
@@ -195,7 +222,9 @@ class ModelQualityTracker:
         if latest.get("convergence_ok"):
             lines.append("  Convergence: OK")
         else:
-            lines.append(f"  Convergence: WARNING - {latest.get('rhat_warnings', 0)} parameters with high R-hat")
+            lines.append(
+                f"  Convergence: WARNING - {latest.get('rhat_warnings', 0)} parameters with high R-hat"
+            )
 
         # Trends (if enough history)
         if len(self.history) >= 3:
@@ -211,7 +240,9 @@ class ModelQualityTracker:
             ]:
                 trend_data = self.get_trend(metric)
                 if trend_data["trend"] != "insufficient_data":
-                    icon = {"improving": "↑", "degrading": "↓", "stable": "→"}.get(trend_data["trend"], "?")
+                    icon = {"improving": "↑", "degrading": "↓", "stable": "→"}.get(
+                        trend_data["trend"], "?"
+                    )
                     lines.append(f"  {label}: {icon} {trend_data['trend']}")
 
         # Recommendations for model improvement
@@ -222,8 +253,11 @@ class ModelQualityTracker:
         recommendations = []
 
         if latest.get("n_time_periods", 0) < 26:
-            recommendations.append("- Accumulate more time periods (currently {}, need 26+)".format(
-                latest.get("n_time_periods", 0)))
+            recommendations.append(
+                "- Accumulate more time periods (currently {}, need 26+)".format(
+                    latest.get("n_time_periods", 0)
+                )
+            )
 
         if mape is not None and mape > 0.25:
             recommendations.append("- High MAPE suggests model fit issues. Consider:")

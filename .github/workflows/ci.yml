@@ -29,7 +29,11 @@ jobs:
       - name: Run tests
         run: uv run --frozen pytest -q
       - name: Run semantic lint checks
-        run: uv run --frozen ruff check . --ignore E501
+        run: uv run --frozen ruff check .
+      - name: Check formatting
+        run: uv run --frozen ruff format --check .
+      - name: Run strict type checks
+        run: uv run --frozen mypy mmm
       - name: Build package
         run: uv build
       - name: Smoke-test CLI

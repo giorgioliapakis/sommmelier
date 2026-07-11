@@ -30,7 +30,9 @@ class OrganicMediaChannel(BaseModel):
 class TreatmentVariable(BaseModel):
     """Configuration for a non-media treatment variable (pricing, promotions)."""
 
-    name: str = Field(..., description="Treatment identifier (e.g., 'pricing', 'promotion_discount')")
+    name: str = Field(
+        ..., description="Treatment identifier (e.g., 'pricing', 'promotion_discount')"
+    )
     column: str = Field(..., description="Column name for treatment data")
     counterfactual_baseline: float | None = Field(
         None, description="Counterfactual baseline value (None = use column min)"
@@ -144,8 +146,8 @@ MMM Dataset Summary
 ==================
 Date Range: {self.date_range[0]} to {self.date_range[1]}
 Time Periods: {self.n_time_periods}
-Geographies: {self.n_geos} ({', '.join(self.geos[:5])}{'...' if len(self.geos) > 5 else ''})
-Media Channels: {len(self.media_channels)} ({', '.join(self.media_channels)})
+Geographies: {self.n_geos} ({", ".join(self.geos[:5])}{"..." if len(self.geos) > 5 else ""})
+Media Channels: {len(self.media_channels)} ({", ".join(self.media_channels)})
 Total Spend: ${self.total_spend:,.2f}
 Total KPI: {self.total_kpi:,.0f}
 """

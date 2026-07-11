@@ -55,7 +55,7 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
                 "Population data is required. Set allow_population_estimates=True "
                 "only when the coarse built-in fallback is acceptable."
             )
-        geo_populations = _estimate_population(df["geo"].unique())
+        geo_populations = _estimate_population([str(geo) for geo in df["geo"].unique()])
         df["population"] = df["geo"].map(geo_populations)
         builder = builder.with_population(df)
 
@@ -63,9 +63,7 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
     if config.kpi_type == "non_revenue":
         revenue_per_kpi_column = config.revenue_per_kpi_column
         if revenue_per_kpi_column and revenue_per_kpi_column in df.columns:
-            builder = builder.with_revenue_per_kpi(
-                df, revenue_per_kpi_col=revenue_per_kpi_column
-            )
+            builder = builder.with_revenue_per_kpi(df, revenue_per_kpi_col=revenue_per_kpi_column)
         elif config.revenue_column and config.revenue_column in df.columns:
             revenue_per_kpi_column = "_revenue_per_kpi"
             kpi = df[config.kpi_column]
@@ -73,9 +71,7 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
             if ((kpi == 0) & (revenue != 0)).any():
                 raise ValueError("Revenue cannot be non-zero when KPI is zero")
             df[revenue_per_kpi_column] = revenue.div(kpi.where(kpi != 0)).fillna(0)
-            builder = builder.with_revenue_per_kpi(
-                df, revenue_per_kpi_col=revenue_per_kpi_column
-            )
+            builder = builder.with_revenue_per_kpi(df, revenue_per_kpi_col=revenue_per_kpi_column)
 
     # Separate media channels into spend+impressions vs reach+frequency
     si_channel_names = []

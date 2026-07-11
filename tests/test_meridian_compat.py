@@ -95,7 +95,9 @@ def test_extracts_optimizer_dataset():
         coords={"channel": SimpleNamespace(values=pd.Series(["meta", "google"]))},
         __getitem__=None,
     )
-    dataset = _FakeDataset(dataset.coords, {"spend": [80.0, 120.0]}, {"total_incremental_outcome": 450.0})
+    dataset = _FakeDataset(
+        dataset.coords, {"spend": [80.0, 120.0]}, {"total_incremental_outcome": 450.0}
+    )
     result = SimpleNamespace(optimized_data=dataset)
 
     allocation, outcome = extract_optimization_result(result)

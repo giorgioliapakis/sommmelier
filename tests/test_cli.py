@@ -20,9 +20,7 @@ def test_validate_returns_nonzero_for_invalid_dataset():
 
 def test_analyze_blocks_results_that_failed_quality_checks(tmp_path):
     results = tmp_path / "results.json"
-    results.write_text(
-        '{"run_manifest": {"status": "complete", "quality_status": "failed"}}'
-    )
+    results.write_text('{"run_manifest": {"status": "complete", "quality_status": "failed"}}')
 
     result = runner.invoke(app, ["analyze", str(results)])
 

@@ -37,7 +37,7 @@ class Insight:
     recommendation: str
     potential_impact: str | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str | None]:
         """Convert to dictionary for JSON serialization."""
         return {
             "type": self.type.value,
@@ -75,10 +75,29 @@ def generate_insights(
     # Sort channels by ROI
     sorted_roi = sorted(results.channel_roi.items(), key=lambda x: x[1], reverse=True)
 
-    # Insight 1: Identify high ROI channels
+    if not results.roi_is_monetary:
+        best_channel, best_efficiency = sorted_roi[0]
+        insights.append(
+            Insight(
+                type=InsightType.EFFICIENCY,
+                priority=InsightPriority.MEDIUM,
+                channel=best_channel,
+                title=f"{best_channel} has the highest KPI efficiency",
+                description=(
+                    f"{best_channel} generated an estimated {best_efficiency:.4f} "
+                    "incremental KPI units per currency unit spent."
+                ),
+                recommendation=(
+                    "Use CPIK and uncertainty intervals for comparison; revenue data is "
+                    "required before making profitability claims."
+                ),
+            )
+        )
+
+    # Monetary-only profitability insights.
     high_roi_threshold = 1.5
     for channel, roi in sorted_roi:
-        if roi >= high_roi_threshold:
+        if results.roi_is_monetary and roi >= high_roi_threshold:
             insights.append(
                 Insight(
                     type=InsightType.HIGH_ROI,
@@ -94,7 +113,7 @@ def generate_insights(
     # Insight 2: Identify low/negative ROI channels
     low_roi_threshold = 0.8
     for channel, roi in sorted_roi:
-        if roi < low_roi_threshold:
+        if results.roi_is_monetary and roi < low_roi_threshold:
             insights.append(
                 Insight(
                     type=InsightType.LOW_ROI,
@@ -194,35 +213,41 @@ def insights_to_markdown(insights: list[Insight]) -> str:
     if high_priority:
         lines.extend(["## High Priority", ""])
         for insight in high_priority:
-            lines.extend([
-                f"### {insight.title}",
-                "",
-                insight.description,
-                "",
-                f"**Recommendation:** {insight.recommendation}",
-                "",
-                f"*Impact: {insight.potential_impact}*" if insight.potential_impact else "",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"### {insight.title}",
+                    "",
+                    insight.description,
+                    "",
+                    f"**Recommendation:** {insight.recommendation}",
+                    "",
+                    f"*Impact: {insight.potential_impact}*" if insight.potential_impact else "",
+                    "",
+                ]
+            )
 
     if medium_priority:
         lines.extend(["## Medium Priority", ""])
         for insight in medium_priority:
-            lines.extend([
-                f"### {insight.title}",
-                "",
-                insight.description,
-                "",
-                f"**Recommendation:** {insight.recommendation}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"### {insight.title}",
+                    "",
+                    insight.description,
+                    "",
+                    f"**Recommendation:** {insight.recommendation}",
+                    "",
+                ]
+            )
 
     if low_priority:
         lines.extend(["## Notes", ""])
         for insight in low_priority:
-            lines.extend([
-                f"- **{insight.title}**: {insight.description}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"- **{insight.title}**: {insight.description}",
+                    "",
+                ]
+            )
 
     return "\n".join(lines)
