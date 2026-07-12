@@ -6,13 +6,18 @@ from types import SimpleNamespace
 
 import altair as alt
 import pandas as pd
+import pytest
 import xarray as xr
 
 from mmm.meridian_compat import (
+    extract_adstock_decay,
     extract_channel_contributions,
+    extract_holdout_accuracy,
     extract_non_paid_contributions,
+    extract_optimal_frequency,
     extract_optimization_result,
     extract_predictive_accuracy,
+    extract_response_curves,
     extract_rhat_diagnostics,
     save_chart,
     serialize_model_review,
@@ -90,6 +95,115 @@ def test_extracts_predictive_accuracy_metrics():
     metrics = extract_predictive_accuracy(dataset)
 
     assert metrics == {"r_squared": 0.8, "mape": 0.15000000000000002, "wmape": 0.1}
+
+
+def test_extracts_holdout_accuracy_from_test_evaluation_set_only():
+    dataset = xr.Dataset(
+        {
+            "value": (
+                ("metric", "geo_granularity", "evaluation_set"),
+                [
+                    [[0.95, 0.60, 0.85], [0.90, 0.55, 0.80]],
+                    [[0.05, 0.20, 0.10], [0.06, 0.25, 0.12]],
+                    [[0.04, 0.18, 0.09], [0.05, 0.22, 0.11]],
+                ],
+            )
+        },
+        coords={
+            "metric": ["R_Squared", "MAPE", "wMAPE"],
+            "geo_granularity": ["Geo", "National"],
+            "evaluation_set": ["Train", "Test", "All Data"],
+        },
+    )
+
+    holdout = extract_holdout_accuracy(dataset, holdout_weeks=8)
+
+    assert holdout == {
+        "holdout_weeks": 8,
+        "evaluation_set": "Test",
+        "metrics": {
+            "geo": {"r_squared": 0.6, "mape": 0.2, "wmape": 0.18},
+            "national": {"r_squared": 0.55, "mape": 0.25, "wmape": 0.22},
+        },
+    }
+
+
+def test_holdout_accuracy_requires_test_evaluation_set():
+    dataset = xr.Dataset(
+        {"value": (("metric", "evaluation_set"), [[0.8]])},
+        coords={"metric": ["R_Squared"], "evaluation_set": ["All Data"]},
+    )
+
+    with pytest.raises(ValueError, match="Test evaluation set"):
+        extract_holdout_accuracy(dataset, holdout_weeks=8)
+
+
+def test_extracts_response_curve_mean_by_metric_name():
+    dataset = xr.Dataset(
+        {
+            "incremental_outcome": (
+                ("channel", "spend_multiplier", "metric"),
+                [
+                    [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]],
+                    [[4.0, 40.0], [5.0, 50.0], [6.0, 60.0]],
+                ],
+            )
+        },
+        coords={
+            "channel": ["meta", "search"],
+            "spend_multiplier": [0.5, 1.0, 1.5],
+            "metric": ["ci_lo", "mean"],
+        },
+    )
+
+    curves = extract_response_curves(dataset, ["meta", "search"])
+
+    assert curves["meta"] == {
+        "spend_multiplier": [0.5, 1.0, 1.5],
+        "response": [10.0, 20.0, 30.0],
+    }
+    assert curves["search"]["response"] == [40.0, 50.0, 60.0]
+
+
+def test_extracts_adstock_retention_and_mean_fallback():
+    frame = pd.DataFrame(
+        {
+            "channel": ["meta", "meta", "search"],
+            "time_units": [0.0, 1.0, 2.0],
+            "is_int_time_unit": [True, True, True],
+            "mean": [1.0, 0.6, 0.4],
+        }
+    )
+
+    decay = extract_adstock_decay(frame, ["meta", "search"])
+
+    assert decay["meta"] == {"retention_at_1_period": 0.6}
+    assert decay["search"] == {"mean_decay": 0.4}
+
+
+def test_extracts_optimal_frequency_mean_by_metric_name():
+    dataset = xr.Dataset(
+        {
+            "optimal_frequency": (
+                ("rf_channel", "metric"),
+                [[1.5, 2.5], [2.0, 3.0]],
+            )
+        },
+        coords={
+            "rf_channel": ["video", "tv"],
+            "metric": ["ci_lo", "mean"],
+        },
+    )
+
+    frequencies = extract_optimal_frequency(dataset, ["video", "tv"])
+
+    assert frequencies == {"video": 2.5, "tv": 3.0}
+
+
+def test_optimal_frequency_tensor_requires_one_value_per_channel():
+    frequencies = extract_optimal_frequency(_Array([[[2.5, 3.0]]]), ["video", "tv"])
+
+    assert frequencies == {"video": 2.5, "tv": 3.0}
 
 
 def test_extracts_max_rhat_summary():

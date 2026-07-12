@@ -42,6 +42,8 @@ This work fixes those highest-risk issues and raises measured line coverage from
 | Direct paid submission | `modal run` performed several readiness checks only after invoking the remote function, so an obviously invalid dataset could start billable GPU compute | Direct runs now execute the shared full local preflight first; a live expected-failure check rejects the 8-week fixture without remote submission |
 | Paid-run options | Explicit population/impression fallback flags were ignored by local preflight, while invalid holdouts were silently skipped only after GPU submission | Preflight now preserves authorized fallback flags and validates holdout bounds before invoking Modal; the GPU path shares the same strict holdout-mask implementation |
 | Modal input construction | The GPU runtime duplicated local column detection, validation, fallback, revenue, control, and Meridian builder logic across roughly 240 lines | File and in-memory inputs now share one loader, preflight contract, and package-level `InputData` builder; Modal is only the compute adapter for this stage |
+| Holdout validity | Holdouts used one contiguous trailing window for every geo, which Meridian explicitly discourages, then averaged Train, Test, and All Data metrics into a mislabeled holdout score | Masks are deterministically balanced across geo and time, and reporting selects the `Test` evaluation set with separate geo and national metrics, following [Meridian's holdout guidance](https://developers.google.com/meridian/docs/advanced-modeling/holdout-observations) |
+| Optional result schemas | Response curves assumed the first metric was the mean, optimal frequency selected arbitrary first coordinates, and adstock parsing lived only inside Modal | Release-sensitive response, adstock, optimal-frequency, and holdout shapes now use isolated compatibility adapters with explicit tensor and xarray contracts |
 
 ## Remaining risks and opportunities
 
@@ -62,7 +64,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 ## Verification performed
 
-- `uv run --frozen pytest -q`: 133 passed
+- `uv run --frozen pytest -q`: 141 passed
 - `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 82% total coverage
 - `uv run --frozen ruff check .` and `ruff format --check .`: passed repository-wide
 - `uv run --frozen mypy mmm`: strict typing passed for all 30 source files

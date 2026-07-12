@@ -8,20 +8,17 @@ from mmm.validation.holdout import generate_holdout_mask
 
 class TestGenerateHoldoutMask:
     def test_basic_holdout(self):
-        """52-week dataset, holdout last 8 weeks."""
+        """Holdout observations are balanced instead of forming a trailing block."""
         mask = generate_holdout_mask(n_geos=3, n_periods=52, holdout_weeks=8)
         assert mask.shape == (3, 52)
         assert mask.dtype == bool
-        # Last 8 columns should be True
-        assert mask[:, -8:].all()
-        # First 44 columns should be False
-        assert not mask[:, :44].any()
+        assert (mask.sum(axis=1) == 8).all()
+        assert mask.sum(axis=0).max() - mask.sum(axis=0).min() <= 1
+        assert not mask[:, -8:].all()
 
-    def test_holdout_all_geos(self):
-        """All geos have the same holdout pattern."""
+    def test_holdout_patterns_are_staggered_across_geos(self):
         mask = generate_holdout_mask(n_geos=5, n_periods=52, holdout_weeks=4)
-        for g in range(5):
-            np.testing.assert_array_equal(mask[0], mask[g])
+        assert any(not np.array_equal(mask[0], mask[g]) for g in range(1, 5))
 
     def test_no_holdout_raises(self):
         """holdout_weeks=0 raises ValueError."""
@@ -40,10 +37,15 @@ class TestGenerateHoldoutMask:
     def test_exact_half_is_allowed(self):
         """holdout_weeks == n_periods/2 is the boundary — allowed."""
         mask = generate_holdout_mask(n_geos=2, n_periods=52, holdout_weeks=26)
-        assert mask[:, -26:].all()
-        assert not mask[:, :26].any()
+        assert (mask.sum(axis=1) == 26).all()
+        assert mask.sum(axis=0).max() - mask.sum(axis=0).min() <= 1
 
     def test_holdout_count(self):
         """Total held-out observations = n_geos * holdout_weeks."""
         mask = generate_holdout_mask(n_geos=3, n_periods=52, holdout_weeks=8)
         assert mask.sum() == 3 * 8
+
+    @pytest.mark.parametrize(("n_geos", "n_periods"), [(0, 52), (3, 0)])
+    def test_invalid_dimensions_raise(self, n_geos, n_periods):
+        with pytest.raises(ValueError, match="n_geos and n_periods"):
+            generate_holdout_mask(n_geos=n_geos, n_periods=n_periods, holdout_weeks=1)

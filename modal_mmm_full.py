@@ -42,7 +42,7 @@ def fit_mmm_full(
     max_lag: int = 8,
     run_optimization: bool = True,
     calibration_priors: dict | None = None,  # Channel-specific priors from calibration
-    holdout_weeks: int = 0,  # Number of trailing weeks to hold out (0 = no holdout)
+    holdout_weeks: int = 0,  # Balanced observations per geo to hold out (0 = no holdout)
     adstock_overrides: dict | None = None,  # {"channel": "geometric"|"binomial"}
     force_aks: bool | None = None,  # None=auto, True=force AKS, False=force manual knots
     allow_population_estimates: bool = False,
@@ -65,10 +65,14 @@ def fit_mmm_full(
     import pandas as pd
 
     from mmm.meridian_compat import (
+        extract_adstock_decay,
         extract_channel_contributions,
+        extract_holdout_accuracy,
         extract_non_paid_contributions,
+        extract_optimal_frequency,
         extract_optimization_result,
         extract_predictive_accuracy,
+        extract_response_curves,
         extract_rhat_diagnostics,
         save_chart,
         serialize_model_review,
@@ -230,7 +234,7 @@ def fit_mmm_full(
                 adstock_decay_spec[ch] = "geometric"
     print(f"Adstock types: {adstock_decay_spec}")
 
-    # Build holdout mask if requested (out-of-time validation)
+    # Build a geo/time-balanced holdout mask if requested.
     holdout_id = None
     if holdout_weeks and holdout_weeks > 0:
         from mmm.validation.holdout import generate_holdout_mask
@@ -241,7 +245,8 @@ def fit_mmm_full(
             holdout_weeks=holdout_weeks,
         )
         print(
-            f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)"
+            f"Holdout validation: {holdout_weeks} balanced observations per geo "
+            f"({holdout_id.sum()} total)"
         )
 
     # Determine knot strategy: AKS vs manual
@@ -379,34 +384,9 @@ def fit_mmm_full(
     try:
         spend_multipliers = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
         response_ds = mmm_analyzer.response_curves(spend_multipliers=spend_multipliers)
-        if response_ds is not None:
-            # Meridian 1.4.x returns xarray Dataset with dims: spend_multiplier, channel, metric
-            # and data vars: spend, incremental_outcome
-            if "incremental_outcome" in response_ds.data_vars and "channel" in response_ds.dims:
-                for ch in channels:
-                    try:
-                        # Get mean incremental outcome across the metric dimension
-                        ch_data = response_ds["incremental_outcome"].sel(channel=ch)
-                        # metric dim has [mean, ci_lo, ci_hi] — take mean (index 0)
-                        if "metric" in ch_data.dims:
-                            mean_response = ch_data.sel(
-                                metric=ch_data.coords["metric"].values[0]
-                            ).values.tolist()
-                        else:
-                            mean_response = ch_data.values.tolist()
-                        results["response_curves"][ch] = {
-                            "spend_multiplier": spend_multipliers,
-                            "response": mean_response,
-                        }
-                    except (KeyError, IndexError):
-                        results["response_curves"][ch] = {
-                            "spend_multiplier": spend_multipliers,
-                            "response": [],
-                        }
-            else:
-                print(
-                    f"  Response curves xarray: vars={list(response_ds.data_vars)}, dims={dict(response_ds.dims)}"
-                )
+        results["response_curves"] = extract_response_curves(
+            response_ds, channels, spend_multipliers
+        )
     except Exception as e:
         print(f"Warning: Response curves extraction failed: {e}")
         record_section_error(results, "response_curves", e)
@@ -414,37 +394,7 @@ def fit_mmm_full(
     # 4. Adstock decay
     print("Extracting adstock decay...")
     try:
-        adstock_data = mmm_analyzer.adstock_decay()
-        if adstock_data is not None and hasattr(adstock_data, "columns"):
-            # DataFrame with columns: metric, channel, time_units, ..., mean, ...
-            # Extract the decay at time_unit=1 (one-period decay rate) per channel
-            for ch in channels:
-                ch_data = (
-                    adstock_data[adstock_data["channel"] == ch]
-                    if "channel" in adstock_data.columns
-                    else None
-                )
-                if ch_data is not None and len(ch_data) > 0 and "mean" in ch_data.columns:
-                    # Get decay at integer time points for a summary
-                    int_data = ch_data[
-                        ch_data.get("is_int_time_unit", pd.Series([True] * len(ch_data)))
-                    ]
-                    if len(int_data) > 1:
-                        # Decay at t=1 gives the retention rate
-                        t1 = (
-                            int_data[int_data["time_units"] == 1.0]
-                            if "time_units" in int_data.columns
-                            else None
-                        )
-                        if t1 is not None and len(t1) > 0:
-                            results["adstock_decay"][ch] = {
-                                "retention_at_1_period": float(t1["mean"].iloc[0]),
-                            }
-                        else:
-                            # Just use the overall mean decay
-                            results["adstock_decay"][ch] = {
-                                "mean_decay": float(ch_data["mean"].mean()),
-                            }
+        results["adstock_decay"] = extract_adstock_decay(mmm_analyzer.adstock_decay(), channels)
     except Exception as e:
         print(f"Warning: Adstock decay extraction failed: {e}")
         record_section_error(results, "adstock_decay", e)
@@ -466,32 +416,9 @@ def fit_mmm_full(
     if rf_channels:
         print("Extracting optimal frequency for R&F channels...")
         try:
-            opt_freq = mmm_analyzer.optimal_freq()
-            if opt_freq is not None:
-                if hasattr(opt_freq, "numpy"):
-                    opt_freq_np = opt_freq.numpy()
-                    opt_freq_mean = opt_freq_np.mean(axis=(0, 1))
-                    for i, ch in enumerate(rf_channels):
-                        results["optimal_frequency"][ch] = float(opt_freq_mean[i])
-                elif hasattr(opt_freq, "data_vars"):
-                    # xarray Dataset with dims: frequency, rf_channel, metric
-                    # and var: optimal_frequency
-                    for ch in rf_channels:
-                        try:
-                            # Select by rf_channel first, then get optimal_frequency scalar
-                            ch_data = (
-                                opt_freq.sel(rf_channel=ch)
-                                if "rf_channel" in opt_freq.dims
-                                else opt_freq
-                            )
-                            val = ch_data["optimal_frequency"]
-                            # val may have metric dim or be scalar
-                            if val.dims:
-                                val = val.isel({d: 0 for d in val.dims})  # take first element
-                            results["optimal_frequency"][ch] = float(val.values)
-                        except Exception as e:
-                            print(f"  Warning: Could not extract optimal freq for {ch}: {e}")
-                            record_section_error(results, "optimal_frequency", e)
+            results["optimal_frequency"] = extract_optimal_frequency(
+                mmm_analyzer.optimal_freq(), rf_channels
+            )
         except Exception as e:
             print(f"Warning: Optimal frequency extraction failed: {e}")
             record_section_error(results, "optimal_frequency", e)
@@ -564,23 +491,8 @@ def fit_mmm_full(
     if holdout_id is not None:
         print("Extracting holdout validation metrics...")
         try:
-            # predictive_accuracy with holdout gives in-sample and out-of-sample metrics
-            holdout_accuracy = mmm_analyzer.predictive_accuracy()
-            if holdout_accuracy is not None:
-                results["holdout_validation"] = {
-                    "holdout_weeks": holdout_weeks,
-                }
-                # Extract in-sample and out-of-sample R-squared if available
-                if "metric" in holdout_accuracy.dims or "metric" in holdout_accuracy.coords:
-                    for metric_name in holdout_accuracy.coords.get(
-                        "metric", holdout_accuracy.dims.get("metric", [])
-                    ).values:
-                        metric_str = str(metric_name).lower().replace("_", "")
-                        if "rsquared" in metric_str:
-                            val = holdout_accuracy.sel(metric=metric_name)["value"].values
-                            val_float = float(val.mean()) if val.size > 1 else float(val)
-                            results["holdout_validation"]["r_squared"] = val_float
-                print(f"  Holdout validation: {results.get('holdout_validation', {})}")
+            results["holdout_validation"] = extract_holdout_accuracy(accuracy_ds, holdout_weeks)
+            print(f"  Holdout validation: {results['holdout_validation']}")
         except Exception as e:
             print(f"Warning: Holdout validation extraction failed: {e}")
             record_section_error(results, "holdout_validation", e)
@@ -746,7 +658,7 @@ def main(
     max_lag: int = 8,
     report: bool = False,
     calibration: str = "",  # Path to calibration.json
-    holdout_weeks: int = 0,  # Hold out last N weeks for validation (~$0.30 extra GPU)
+    holdout_weeks: int = 0,  # Balanced observations per geo (~$0.30 extra GPU)
     allow_population_estimates: bool = False,
     allow_impression_estimates: bool = False,
 ):
