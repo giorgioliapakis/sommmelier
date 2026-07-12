@@ -28,6 +28,14 @@ def test_summary_preserves_zero_metrics_and_convergence_status():
     assert "Max R-hat: 0.000" in summary
 
 
+def test_summary_labels_non_monetary_efficiency_without_roi_multiplier():
+    summary = ModelResults(channel_roi={"meta": 0.8}, roi_is_monetary=False).summary()
+
+    assert "Channel KPI Efficiency" in summary
+    assert "0.80 KPI/currency" in summary
+    assert "0.80x" not in summary
+
+
 def test_optimize_budget_uses_current_meridian_contract():
     captured = {}
 
@@ -111,7 +119,14 @@ def test_extract_results_uses_shared_meridian_contract():
     fitted_model = object()
     wrapper = AutoMMM.__new__(AutoMMM)
     wrapper._meridian = fitted_model
-    wrapper.dataset = SimpleNamespace(media_channels=["meta", "search"])
+    wrapper.dataset = SimpleNamespace(
+        media_channels=["meta", "search"],
+        config=SimpleNamespace(
+            kpi_type="non_revenue",
+            revenue_per_kpi_column=None,
+            revenue_column=None,
+        ),
+    )
 
     modules = {
         "meridian": meridian,
@@ -164,9 +179,7 @@ def test_model_bundle_round_trip_uses_safe_formats(tmp_path):
     )
     dataset = MMMDataset(
         df=frame,
-        config=DataConfig(
-            media_channels=[MediaChannel(name="meta", spend_column="meta_spend")]
-        ),
+        config=DataConfig(media_channels=[MediaChannel(name="meta", spend_column="meta_spend")]),
         date_range=(date(2026, 1, 5), date(2026, 1, 12)),
         geos=["AU"],
         n_time_periods=2,

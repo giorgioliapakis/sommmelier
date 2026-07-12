@@ -17,9 +17,7 @@ def test_find_latest_results_can_exclude_preexisting_files(tmp_path: Path, monke
     assert find_latest_results(exclude={stale}).resolve() == fresh.resolve()
 
 
-def test_find_latest_results_returns_none_when_only_stale_files_exist(
-    tmp_path: Path, monkeypatch
-):
+def test_find_latest_results_returns_none_when_only_stale_files_exist(tmp_path: Path, monkeypatch):
     outputs = tmp_path / "outputs"
     outputs.mkdir()
     stale = outputs / "full_results_old.json"
@@ -45,9 +43,7 @@ def test_find_latest_results_finds_simple_result_when_stale_full_result_exists(
 
 def test_decision_readiness_requires_complete_run_and_passed_quality(tmp_path: Path):
     result = tmp_path / "result.json"
-    result.write_text(
-        '{"run_manifest": {"status": "complete", "quality_status": "passed"}}'
-    )
+    result.write_text('{"run_manifest": {"status": "complete", "quality_status": "passed"}}')
 
     assert decision_readiness(result) == (
         True,
@@ -57,9 +53,7 @@ def test_decision_readiness_requires_complete_run_and_passed_quality(tmp_path: P
 
 def test_decision_readiness_blocks_failed_quality_and_legacy_results(tmp_path: Path):
     failed = tmp_path / "failed.json"
-    failed.write_text(
-        '{"run_manifest": {"status": "complete", "quality_status": "failed"}}'
-    )
+    failed.write_text('{"run_manifest": {"status": "complete", "quality_status": "failed"}}')
     legacy = tmp_path / "legacy.json"
     legacy.write_text("{}")
 

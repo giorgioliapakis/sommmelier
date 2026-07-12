@@ -33,7 +33,7 @@ def validate(
     kpi_column: Annotated[str, typer.Option(help="KPI column name")] = "conversions",
     date_column: Annotated[str, typer.Option(help="Date column name")] = "date",
     geo_column: Annotated[str, typer.Option(help="Geography column name")] = "geo",
-):
+) -> None:
     """Validate a dataset for MMM readiness."""
     from mmm.data import load_mmm_data, validate_dataset
     from mmm.data.schema import DataConfig
@@ -77,7 +77,7 @@ def run(
     kpi_column: Annotated[str, typer.Option(help="KPI column name")] = "conversions",
     n_chains: Annotated[int, typer.Option(help="Number of MCMC chains")] = 4,
     n_keep: Annotated[int, typer.Option(help="Samples to keep per chain")] = 500,
-):
+) -> None:
     """Run the MMM model on a dataset (local, no GPU)."""
     from mmm.analysis.reports import generate_report
     from mmm.data import load_mmm_data, validate_dataset
@@ -95,7 +95,9 @@ def run(
         if not validation.passed:
             console.print(validation.summary())
             raise typer.Exit(1)
-        console.print(f"[green]✓[/green] Loaded {dataset.n_time_periods} time periods, {dataset.n_geos} geos")
+        console.print(
+            f"[green]✓[/green] Loaded {dataset.n_time_periods} time periods, {dataset.n_geos} geos"
+        )
 
     model_config = ModelConfig(
         n_chains=n_chains,
@@ -126,9 +128,11 @@ def run(
 
 @app.command()
 def analyze(
-    results_path: Annotated[Path | None, typer.Argument(help="Path to results JSON (uses latest if not specified)")] = None,
+    results_path: Annotated[
+        Path | None, typer.Argument(help="Path to results JSON (uses latest if not specified)")
+    ] = None,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
-):
+) -> None:
     """Analyze MMM results and generate recommendations."""
     from mmm.recommendations import format_report_for_claude, generate_analysis
 
@@ -185,7 +189,7 @@ def analyze(
 def report(
     results_path: Annotated[Path, typer.Argument(help="Path to results JSON")],
     open_browser: Annotated[bool, typer.Option("--open", help="Open in browser")] = False,
-):
+) -> None:
     """Generate HTML report from MMM results."""
     from mmm.analysis.visualize import generate_html_report
 
@@ -203,6 +207,7 @@ def report(
 
     if open_browser:
         import webbrowser
+
         webbrowser.open(f"file://{report_path.absolute()}")
         console.print("Opened in browser")
 
@@ -210,7 +215,7 @@ def report(
 @app.command()
 def quality(
     show_history: Annotated[bool, typer.Option("--history", help="Show full history")] = False,
-):
+) -> None:
     """Check model quality history and trends."""
     from mmm.tracking import ModelQualityTracker
 
@@ -234,7 +239,7 @@ def quality(
 def optimize(
     model_path: Annotated[Path, typer.Argument(help="Path to saved model")],
     budget: Annotated[float | None, typer.Option(help="Total budget to optimize")] = None,
-):
+) -> None:
     """Run budget optimization on a fitted model."""
     from mmm.model import AutoMMM
 
@@ -284,7 +289,7 @@ def optimize(
 @app.command()
 def insights(
     model_path: Annotated[Path, typer.Argument(help="Path to saved model")],
-):
+) -> None:
     """Generate insights from a fitted model."""
     from mmm.analysis import generate_insights
     from mmm.model import AutoMMM
@@ -315,7 +320,9 @@ def insights(
             "low": "blue",
         }[insight.priority.value]
 
-        console.print(f"[{priority_color}][{insight.priority.value.upper()}][/{priority_color}] {insight.title}")
+        console.print(
+            f"[{priority_color}][{insight.priority.value.upper()}][/{priority_color}] {insight.title}"
+        )
         console.print(f"  {insight.description}")
         console.print(f"  [green]→[/green] {insight.recommendation}")
         console.print()

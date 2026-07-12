@@ -85,9 +85,7 @@ def test_revenue_with_zero_kpi_fails(tmp_path: Path):
 
     report = validate_dataset(load_mmm_data(_write_dataset(tmp_path, rows)))
 
-    revenue_check = next(
-        r for r in report.results if r.check_name == "Revenue-to-KPI Consistency"
-    )
+    revenue_check = next(r for r in report.results if r.check_name == "Revenue-to-KPI Consistency")
     assert not report.passed
     assert not revenue_check.passed
 
@@ -154,8 +152,6 @@ def test_missing_media_execution_fails_without_explicit_estimate(tmp_path: Path)
 
     report = validate_dataset(load_mmm_data(_write_dataset(tmp_path, rows)))
 
-    execution_check = next(
-        r for r in report.results if r.check_name == "Media Execution Data"
-    )
+    execution_check = next(r for r in report.results if r.check_name == "Media Execution Data")
     assert not report.passed
     assert not execution_check.passed

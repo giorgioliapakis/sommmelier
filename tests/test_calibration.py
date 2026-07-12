@@ -132,18 +132,17 @@ def test_rejects_calibration_that_does_not_match_model_outcome():
     )
 
     with pytest.raises(ValueError, match="does not match the model outcome"):
-        calculate_channel_priors(
-            calibration, expected_metric="incremental_kpi_per_currency"
-        )
+        calculate_channel_priors(calibration, expected_metric="incremental_kpi_per_currency")
 
 
 def test_infers_calibration_metric_from_model_columns():
     assert infer_calibration_metric(["date", "conversions"], "conversions") == (
         "incremental_kpi_per_currency"
     )
-    assert infer_calibration_metric(
-        ["date", "conversions", "revenue_per_conversion"], "conversions"
-    ) == "monetary_roi"
+    assert (
+        infer_calibration_metric(["date", "conversions", "revenue_per_conversion"], "conversions")
+        == "monetary_roi"
+    )
     assert infer_calibration_metric(["date", "revenue"], "revenue") == "monetary_roi"
 
 
@@ -168,8 +167,7 @@ def test_calibration_metric_round_trips(tmp_path):
 def test_legacy_ambiguous_calibration_is_rejected(tmp_path):
     path = tmp_path / "calibration.json"
     path.write_text(
-        '{"prior_beliefs": [{"channel": "meta", "expected_roi_low": 1, '
-        '"expected_roi_high": 2}]}'
+        '{"prior_beliefs": [{"channel": "meta", "expected_roi_low": 1, "expected_roi_high": 2}]}'
     )
 
     with pytest.raises(ValueError, match="must declare metric"):

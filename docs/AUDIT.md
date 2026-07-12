@@ -6,7 +6,7 @@ Audit date: 2026-07-11
 
 Sommmelier has a compelling product shape: local data checks, GPU fitting, model diagnostics, reporting, recommendations, calibration, and longitudinal quality tracking are all present. The project is still alpha-quality, however. Before this audit, several paths could produce confident-looking but incorrect output: an asynchronous weekly run could select an old result, non-monetary KPI efficiency could be described as profit, malformed panel data could reach paid GPU fitting, and calibration parameters mixed linear and log scales.
 
-This work fixes those highest-risk issues and raises measured line coverage from 8% to 52%. The project is substantially safer to experiment with, but still needs more real-data coverage before it should be treated as an unattended production decision system.
+This work fixes those highest-risk issues and raises measured line coverage from 8% to 63%. The project is substantially safer to experiment with, but still needs more real-data coverage before it should be treated as an unattended production decision system.
 
 ## What was fixed
 
@@ -32,6 +32,8 @@ This work fixes those highest-risk issues and raises measured line coverage from
 | CLI contract | `sommmelier validate` printed `FAILED` but exited with status 0 | Invalid data now returns status 1, making scripts and CI reliable |
 | Packaging | The classifier said Apache while the project and `LICENSE` say MIT | Metadata now consistently says MIT |
 | Test setup | A plain test run required an optional coverage plugin | Coverage is now opt-in at the command line; a normal `pytest` run works |
+| Quality gates | Ruff reported 200 issues and strict mypy reported 97 errors while neither ran in CI | The repository is formatted, Ruff and strict mypy pass, and both are enforced on Python 3.11 and 3.12 |
+| Observability | Local and remote print logs could not be reliably correlated | Structured JSON events now carry one run ID across submission, sampling, completion, downloads, artifacts, and quality history |
 
 ## Remaining risks and opportunities
 
@@ -47,28 +49,27 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 ### P2 — next hardening pass
 
-1. Raise coverage around the recommendation/advisor modules, CLI commands, report generator, and trend reporting. Overall coverage is now 52%; the model builder improved from 6% to 57% in this pass.
-2. Add structured logging around the new run ID across local and remote stages. The manifest is queryable, but print-based events are still hard to correlate in external logging systems.
-3. Finish the configured quality gates. Repository-wide semantic Ruff checks pass and run in CI, but 181 pre-existing line-length violations remain excluded and strict mypy still has a substantial baseline.
-4. Add model-bundle compatibility tests against a small genuinely fitted Meridian artifact, not only the isolated serializer contract.
+1. Raise coverage around CLI commands and the recommendation engine. Overall coverage is now 63%; local reports are at 75%, insights 80%, tracking 65%, the improvement advisor 51%, and the model builder 57%.
+2. Add model-bundle compatibility tests against a small genuinely fitted Meridian artifact, not only the isolated serializer contract.
 
 ## Verification performed
 
-- `uv run --frozen pytest -q`: 82 passed
-- `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 52% total coverage
-- Repository-wide Ruff semantic checks: passed (line-length is temporarily excluded because 181 pre-existing violations remain)
+- `uv run --frozen pytest -q`: 90 passed
+- `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 63% total coverage
+- `uv run --frozen ruff check .` and `ruff format --check .`: passed repository-wide
+- `uv run --frozen mypy mmm`: strict typing passed for all 26 source files
 - `python3 -m compileall`: passed
 - `git diff --check`: passed
 - CLI failure contract tested through Typer's runner
 - Live Meridian 1.6.2 T4 smoke: 10 distinct valid PNG charts, 3 populated optimizer scenarios, structured six-check ModelReviewer output, correct non-convergence status, local JSON, and HTML report
 - Follow-up manifest smoke: technical status `complete`, quality status `failed` for the deliberately under-sampled fit, visible HTML warning, and CLI recommendation blocking
 - Calibration mismatch preflight: rejected incompatible units before the remote GPU function was invoked
-- Locked dependency graph generated with uv; CI covers Python 3.11 and 3.12, tests, semantic Ruff, package build, and CLI startup
+- Structured preflight logs: valid JSON event with the same run ID used by the manifest and remote call
+- Locked dependency graph generated with uv; CI covers Python 3.11 and 3.12, tests, Ruff lint/format, strict mypy, package build, and CLI startup
 
 ## Recommended build sequence
 
-1. Land the unified runtime, manifest, calibration-unit, persistence, and input-safety work.
-2. Move the remaining Modal input/result logic into package modules with isolated contract tests.
-3. Add manually dispatched paid fixtures for the remaining model shapes.
-4. Add structured logging and continue the type, line-length, and coverage cleanup.
-5. Build the next product layer only after decision-readiness gates hold across real customer-shaped data.
+1. Move the remaining Modal input/result logic into package modules with isolated contract tests.
+2. Add manually dispatched paid fixtures for the remaining model shapes.
+3. Continue CLI and recommendation-engine coverage cleanup.
+4. Build the next product layer only after decision-readiness gates hold across real customer-shaped data.

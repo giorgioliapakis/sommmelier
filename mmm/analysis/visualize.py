@@ -6,9 +6,10 @@ Generates charts and visualizations that laypeople can understand.
 
 from html import escape
 from pathlib import Path
+from typing import Any
 
 
-def normalize_results(results: dict) -> dict:
+def normalize_results(results: dict[str, Any]) -> dict[str, Any]:
     """Normalize results from different formats (simple vs full)."""
     normalized = dict(results)
 
@@ -39,7 +40,7 @@ def normalize_results(results: dict) -> dict:
     return normalized
 
 
-def generate_roi_chart_svg(results: dict) -> str:
+def generate_roi_chart_svg(results: dict[str, Any]) -> str:
     """Generate an SVG bar chart showing ROI by channel."""
     results = normalize_results(results)
     roi_data = results.get("roi", {})
@@ -86,10 +87,10 @@ def generate_roi_chart_svg(results: dict) -> str:
 
         svg_bars.append(f'''
         <g transform="translate(0, {y})">
-            <text x="{label_width - 10}" y="{bar_height/2 + 5}" text-anchor="end" font-size="14" fill="#374151">{escape(str(ch))}</text>
+            <text x="{label_width - 10}" y="{bar_height / 2 + 5}" text-anchor="end" font-size="14" fill="#374151">{escape(str(ch))}</text>
             <rect x="{label_width}" y="5" width="{bar_width}" height="{bar_height - 10}" fill="{color}" rx="4"/>
-            <text x="{label_width + bar_width + 10}" y="{bar_height/2 + 5}" font-size="14" font-weight="bold" fill="#1f2937">{roi:.2f}{roi_unit}</text>
-            <line x1="{label_width + ci_lo * scale}" y1="{bar_height/2}" x2="{label_width + ci_hi * scale}" y2="{bar_height/2}" stroke="#6b7280" stroke-width="2"/>
+            <text x="{label_width + bar_width + 10}" y="{bar_height / 2 + 5}" font-size="14" font-weight="bold" fill="#1f2937">{roi:.2f}{roi_unit}</text>
+            <line x1="{label_width + ci_lo * scale}" y1="{bar_height / 2}" x2="{label_width + ci_hi * scale}" y2="{bar_height / 2}" stroke="#6b7280" stroke-width="2"/>
         </g>
         ''')
 
@@ -98,12 +99,12 @@ def generate_roi_chart_svg(results: dict) -> str:
         <style>
             text {{ font-family: system-ui, -apple-system, sans-serif; }}
         </style>
-        {''.join(svg_bars)}
+        {"".join(svg_bars)}
     </svg>
     '''
 
 
-def generate_contribution_chart_svg(results: dict) -> str:
+def generate_contribution_chart_svg(results: dict[str, Any]) -> str:
     """Generate an SVG pie/donut chart showing contribution by channel."""
     results = normalize_results(results)
     contrib_data = results.get("contributions", {})
@@ -114,7 +115,16 @@ def generate_contribution_chart_svg(results: dict) -> str:
     sorted_channels = sorted(contrib_data.items(), key=lambda x: -x[1].get("percentage", 0))
 
     # Colors for channels
-    colors = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"]
+    colors = [
+        "#3b82f6",
+        "#22c55e",
+        "#f59e0b",
+        "#ef4444",
+        "#8b5cf6",
+        "#ec4899",
+        "#14b8a6",
+        "#f97316",
+    ]
 
     # Chart dimensions
     size = 300
@@ -134,6 +144,7 @@ def generate_contribution_chart_svg(results: dict) -> str:
 
         # Convert to radians
         import math
+
         start_rad = math.radians(start_angle)
         end_rad = math.radians(end_angle)
 
@@ -161,7 +172,9 @@ def generate_contribution_chart_svg(results: dict) -> str:
         ly = cy + label_r * math.sin(mid_angle)
 
         if pct >= 8:  # Only show label if segment is big enough
-            svg_labels.append(f'<text x="{lx}" y="{ly}" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="12" font-weight="bold">{pct:.0f}%</text>')
+            svg_labels.append(
+                f'<text x="{lx}" y="{ly}" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="12" font-weight="bold">{pct:.0f}%</text>'
+            )
 
         start_angle = end_angle
 
@@ -183,14 +196,14 @@ def generate_contribution_chart_svg(results: dict) -> str:
         <style>
             text {{ font-family: system-ui, -apple-system, sans-serif; }}
         </style>
-        {''.join(svg_arcs)}
-        {''.join(svg_labels)}
-        {''.join(legend_items)}
+        {"".join(svg_arcs)}
+        {"".join(svg_labels)}
+        {"".join(legend_items)}
     </svg>
     '''
 
 
-def generate_marginal_roi_chart_svg(results: dict) -> str:
+def generate_marginal_roi_chart_svg(results: dict[str, Any]) -> str:
     """Generate chart comparing average ROI vs marginal ROI."""
     results = normalize_results(results)
     roi_data = results.get("roi", {})
@@ -211,7 +224,9 @@ def generate_marginal_roi_chart_svg(results: dict) -> str:
     chart_height = len(channels) * gap + 40
 
     # Find max for scaling
-    all_values = [roi_data.get(ch, {}).get("mean", 0) for ch in channels] + [mroi_data.get(ch, 0) for ch in channels]
+    all_values = [roi_data.get(ch, {}).get("mean", 0) for ch in channels] + [
+        mroi_data.get(ch, 0) for ch in channels
+    ]
     max_val = max(all_values) if all_values else 1
     scale = (width - label_width - 100) / max_val
 
@@ -235,21 +250,21 @@ def generate_marginal_roi_chart_svg(results: dict) -> str:
         </g>
         ''')
 
-    legend = f'''
+    legend = f"""
     <g transform="translate({label_width}, {chart_height - 15})">
         <rect width="12" height="12" fill="#3b82f6" rx="2"/>
         <text x="18" y="10" font-size="11" fill="#374151">Average {metric_name}</text>
         <rect x="120" width="12" height="12" fill="#22c55e" rx="2"/>
         <text x="138" y="10" font-size="11" fill="#374151">Marginal {metric_name} (at current spend)</text>
     </g>
-    '''
+    """
 
     return f'''
     <svg width="{width}" height="{chart_height + 20}" viewBox="0 0 {width} {chart_height + 20}">
         <style>
             text {{ font-family: system-ui, -apple-system, sans-serif; }}
         </style>
-        {''.join(svg_bars)}
+        {"".join(svg_bars)}
         {legend}
     </svg>
     '''
@@ -279,10 +294,10 @@ def interpret_marginal_roi(avg_roi: float, mroi: float) -> str:
         return "Balanced - near optimal spend level"
 
 
-def generate_insights(results: dict) -> list[dict]:
+def generate_insights(results: dict[str, Any]) -> list[dict[str, Any]]:
     """Generate actionable insights from results."""
     results = normalize_results(results)
-    insights = []
+    insights: list[dict[str, Any]] = []
 
     roi_data = results.get("roi", {})
     mroi_data = results.get("marginal_roi", {})
@@ -301,52 +316,62 @@ def generate_insights(results: dict) -> list[dict]:
 
     # Insight 1: Best performing channel
     if roi_is_monetary:
-        insights.append({
-            "type": "success",
-            "title": f"{best_ch.title()} is your best performing channel",
-            "detail": f"With an ROI of {best_data.get('mean', 0):.2f}x, every $1 spent on {best_ch} generates ${best_data.get('mean', 0):.2f} in incremental value.",
-            "action": "Consider increasing budget allocation if marginal ROI and uncertainty support it."
-        })
+        insights.append(
+            {
+                "type": "success",
+                "title": f"{best_ch.title()} is your best performing channel",
+                "detail": f"With an ROI of {best_data.get('mean', 0):.2f}x, every $1 spent on {best_ch} generates ${best_data.get('mean', 0):.2f} in incremental value.",
+                "action": "Consider increasing budget allocation if marginal ROI and uncertainty support it.",
+            }
+        )
     else:
-        insights.append({
-            "type": "info",
-            "title": f"{best_ch.title()} has the highest modeled KPI efficiency",
-            "detail": f"The model estimates {best_data.get('mean', 0):.4f} incremental KPI units per currency unit spent.",
-            "action": "Use CPIK and uncertainty intervals—not a 1.0x breakeven threshold—until revenue data is supplied."
-        })
+        insights.append(
+            {
+                "type": "info",
+                "title": f"{best_ch.title()} has the highest modeled KPI efficiency",
+                "detail": f"The model estimates {best_data.get('mean', 0):.4f} incremental KPI units per currency unit spent.",
+                "action": "Use CPIK and uncertainty intervals—not a 1.0x breakeven threshold—until revenue data is supplied.",
+            }
+        )
 
     # Insight 2: Worst performing (if below 1.0)
     if roi_is_monetary and worst_data.get("mean", 0) < 1.0:
-        insights.append({
-            "type": "warning",
-            "title": f"{worst_ch.title()} has ROI below breakeven",
-            "detail": f"ROI of {worst_data.get('mean', 0):.2f}x means you're losing money on this channel.",
-            "action": "Consider reducing spend or improving targeting/creative."
-        })
+        insights.append(
+            {
+                "type": "warning",
+                "title": f"{worst_ch.title()} has ROI below breakeven",
+                "detail": f"ROI of {worst_data.get('mean', 0):.2f}x means you're losing money on this channel.",
+                "action": "Consider reducing spend or improving targeting/creative.",
+            }
+        )
 
     # Insight 3: Saturation check via marginal ROI
     if mroi_data:
         for ch, mroi in mroi_data.items():
             avg_roi = roi_data.get(ch, {}).get("mean", 0)
             if mroi < avg_roi * 0.5 and avg_roi > 0:
-                insights.append({
-                    "type": "info",
-                    "title": f"{ch.title()} is showing saturation",
-                    "detail": f"Marginal {metric_name} ({mroi:.2f}{metric_unit}) is much lower than average {metric_name} ({avg_roi:.2f}{metric_unit}).",
-                    "action": "You may be over-investing in this channel."
-                })
+                insights.append(
+                    {
+                        "type": "info",
+                        "title": f"{ch.title()} is showing saturation",
+                        "detail": f"Marginal {metric_name} ({mroi:.2f}{metric_unit}) is much lower than average {metric_name} ({avg_roi:.2f}{metric_unit}).",
+                        "action": "You may be over-investing in this channel.",
+                    }
+                )
 
     # Insight 4: Underinvested channels
     if mroi_data and spend_data:
         for ch, mroi in mroi_data.items():
             avg_roi = roi_data.get(ch, {}).get("mean", 0)
             if mroi > avg_roi * 1.2 and avg_roi > 0:
-                insights.append({
-                    "type": "opportunity",
-                    "title": f"{ch.title()} has room to scale",
-                    "detail": f"Marginal {metric_name} ({mroi:.2f}{metric_unit}) exceeds average {metric_name} ({avg_roi:.2f}{metric_unit}).",
-                    "action": "Additional spend on this channel would likely be efficient."
-                })
+                insights.append(
+                    {
+                        "type": "opportunity",
+                        "title": f"{ch.title()} has room to scale",
+                        "detail": f"Marginal {metric_name} ({mroi:.2f}{metric_unit}) exceeds average {metric_name} ({avg_roi:.2f}{metric_unit}).",
+                        "action": "Additional spend on this channel would likely be efficient.",
+                    }
+                )
 
     return insights
 
@@ -357,17 +382,18 @@ def _embed_png_chart(chart_path: str | None) -> str | None:
         return None
     try:
         import base64
+
         chart_file = Path(chart_path)
         if chart_file.exists():
             data = chart_file.read_bytes()
-            b64 = base64.b64encode(data).decode('ascii')
+            b64 = base64.b64encode(data).decode("ascii")
             return f'<img src="data:image/png;base64,{b64}" style="max-width:100%;height:auto;" />'
     except Exception:
         pass
     return None
 
 
-def generate_html_report(results: dict, output_path: Path | str) -> str:
+def generate_html_report(results: dict[str, Any], output_path: Path | str) -> str:
     """
     Generate a comprehensive HTML report for laypeople.
 
@@ -413,8 +439,12 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
 
     # Use native PNG charts if available, fall back to SVG generation
     roi_chart = _embed_png_chart(charts.get("roi_bar_chart")) or generate_roi_chart_svg(results)
-    contrib_chart = _embed_png_chart(charts.get("contribution_pie")) or generate_contribution_chart_svg(results)
-    mroi_chart = _embed_png_chart(charts.get("roi_vs_mroi")) or generate_marginal_roi_chart_svg(results)
+    contrib_chart = _embed_png_chart(
+        charts.get("contribution_pie")
+    ) or generate_contribution_chart_svg(results)
+    mroi_chart = _embed_png_chart(charts.get("roi_vs_mroi")) or generate_marginal_roi_chart_svg(
+        results
+    )
 
     # Insight cards HTML
     insight_cards = ""
@@ -434,7 +464,7 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
     for insight in insights:
         color = type_colors.get(insight["type"], "#6b7280")
         icon = type_icons.get(insight["type"], "•")
-        insight_cards += f'''
+        insight_cards += f"""
         <div class="insight-card" style="border-left: 4px solid {color};">
             <div class="insight-header">
                 <span class="insight-icon" style="color: {color};">{icon}</span>
@@ -443,14 +473,16 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
             <p class="insight-detail">{escape(str(insight["detail"]))}</p>
             <p class="insight-action"><strong>Recommendation:</strong> {escape(str(insight["action"]))}</p>
         </div>
-        '''
+        """
 
     # ROI interpretation table
     roi_rows = ""
     roi_data = results.get("roi", {})
     roi_is_monetary = metadata.get("roi_is_monetary", False)
     roi_unit = "x" if roi_is_monetary else " KPI/currency"
-    roi_heading = "Return on Investment by Channel" if roi_is_monetary else "KPI Efficiency by Channel"
+    roi_heading = (
+        "Return on Investment by Channel" if roi_is_monetary else "KPI Efficiency by Channel"
+    )
     roi_explainer = (
         "ROI tells you how much incremental value you get back for every dollar spent. "
         "An ROI of 1.5x means $1.50 of incremental value per $1 spent."
@@ -470,15 +502,15 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
     for ch, data in sorted(roi_data.items(), key=lambda x: -x[1].get("mean", 0)):
         roi = data.get("mean", 0)
         interpretation = interpret_roi(roi, roi_is_monetary)
-        roi_rows += f'''
+        roi_rows += f"""
         <tr>
             <td><strong>{escape(str(ch).title())}</strong></td>
             <td>{roi:.2f}{roi_unit}</td>
             <td>{interpretation}</td>
         </tr>
-        '''
+        """
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -702,7 +734,7 @@ def generate_html_report(results: dict, output_path: Path | str) -> str:
         </div>
     </div>
 </body>
-</html>'''
+</html>"""
 
     output_path.write_text(html)
     return str(output_path)

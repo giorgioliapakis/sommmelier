@@ -47,6 +47,7 @@ def fit_mmm_full(
     force_aks: bool | None = None,  # None=auto, True=force AKS, False=force manual knots
     allow_population_estimates: bool = False,
     allow_impression_estimates: bool = False,
+    run_id: str | None = None,
 ) -> dict:
     """
     Fit MMM model and extract comprehensive results for visualization.
@@ -73,6 +74,7 @@ def fit_mmm_full(
         serialize_model_review,
         summarize_channel_tensor,
     )
+    from mmm.observability import configure_run_logger, log_event
     from mmm.result_manifest import (
         create_run_manifest,
         finalize_run_manifest,
@@ -81,43 +83,60 @@ def fit_mmm_full(
 
     # Monkey-patch numpy 2.x compatibility for TFP
     _original_reshape = np.reshape
+
     def _patched_reshape(a, *args, newshape=None, shape=None, **kwargs):
         if newshape is not None and shape is None:
             shape = newshape
         if shape is not None:
             return _original_reshape(a, shape, **kwargs)
         return _original_reshape(a, *args, **kwargs)
+
     np.reshape = _patched_reshape
 
-    warnings.filterwarnings('ignore')
+    warnings.filterwarnings("ignore")
+
+    run_manifest = create_run_manifest(run_id=run_id)
+    run_logger = configure_run_logger(run_manifest["run_id"], "modal")
+    log_event(
+        run_logger,
+        "run_started",
+        n_chains=n_chains,
+        n_keep=n_keep,
+        n_adapt=n_adapt,
+        n_burnin=n_burnin,
+    )
 
     print(f"Starting full MMM analysis at {datetime.now()}")
 
     import tensorflow as tf
+
     print(f"TensorFlow GPUs: {tf.config.list_physical_devices('GPU')}")
 
     # Load and prepare data
     df = pd.read_csv(io.StringIO(data_csv))
 
     # Handle date column (could be 'date' or 'time')
-    if 'date' in df.columns:
-        df = df.rename(columns={'date': 'time'})
-    if 'time' in df.columns:
-        df['time'] = pd.to_datetime(df['time'])
+    if "date" in df.columns:
+        df = df.rename(columns={"date": "time"})
+    if "time" in df.columns:
+        df["time"] = pd.to_datetime(df["time"])
 
-    print(f"Loaded data: {len(df)} rows, {df['geo'].nunique()} geos, {df['time'].nunique()} periods")
+    print(
+        f"Loaded data: {len(df)} rows, {df['geo'].nunique()} geos, {df['time'].nunique()} periods"
+    )
 
     # ─── Auto-detect channels and variable types from column names ───
     detected = detect_columns(df.columns)
 
     # Separate channels into spend+impressions vs reach+frequency
-    si_channels = []       # spend+impressions channel names
+    si_channels = []  # spend+impressions channel names
     si_impression_cols = []
     si_spend_cols = []
-    rf_channels = []       # reach+frequency channel names
+    rf_channels = []  # reach+frequency channel names
     rf_reach_cols = []
     rf_frequency_cols = []
     rf_spend_cols = []
+    estimated_impression_channels = []
 
     spend_cols_by_channel = {}
     for channel in detected.media_channels:
@@ -157,6 +176,7 @@ def fit_mmm_full(
                     )
                 imp_col = f"{ch}_impression"
                 df[imp_col] = df[spend_col] * 100  # Assume $10 CPM
+                estimated_impression_channels.append(ch)
                 print(f"  Estimated impressions for {ch} from spend")
 
             si_impression_cols.append(imp_col)
@@ -166,10 +186,10 @@ def fit_mmm_full(
     if not channels:
         raise ValueError("No paid media columns ending in '_spend' were found")
 
-    duplicate_rows = int(df.duplicated(['geo', 'time']).sum())
+    duplicate_rows = int(df.duplicated(["geo", "time"]).sum())
     if duplicate_rows:
         raise ValueError(f"Found {duplicate_rows} duplicate geo/time rows")
-    expected_rows = int(df['geo'].nunique() * df['time'].nunique())
+    expected_rows = int(df["geo"].nunique() * df["time"].nunique())
     if len(df) != expected_rows:
         raise ValueError(
             f"Geo/time panel is incomplete: expected {expected_rows} rows, found {len(df)}"
@@ -198,38 +218,46 @@ def fit_mmm_full(
 
     # Detect organic media columns (suffix: _organic)
     organic_cols = list(detected.organic_columns)
-    organic_channels = [col.rsplit('_organic', 1)[0] for col in organic_cols]
+    organic_channels = [col.rsplit("_organic", 1)[0] for col in organic_cols]
     if organic_channels:
         print(f"Organic media: {organic_channels}")
 
     # Detect non-media treatment columns (suffix: _treatment)
     treatment_cols = list(detected.treatment_columns)
-    treatment_names = [col.rsplit('_treatment', 1)[0] for col in treatment_cols]
+    treatment_names = [col.rsplit("_treatment", 1)[0] for col in treatment_cols]
     if treatment_names:
         print(f"Non-media treatments: {treatment_names}")
 
     # Detect control columns (suffix: _control, or common names like is_holiday)
     control_cols = list(detected.control_columns)
 
-    if 'population' not in df.columns:
+    if "population" not in df.columns:
         if not allow_population_estimates:
             raise ValueError(
                 "A population column is required. Pass --allow-population-estimates "
                 "only when the coarse built-in fallback is acceptable."
             )
-        pop_map = {'US': 330_000_000, 'UK': 67_000_000, 'AU': 26_000_000}
-        df['population'] = df['geo'].map(lambda x: pop_map.get(x, 10_000_000))
+        pop_map = {"US": 330_000_000, "UK": 67_000_000, "AU": 26_000_000}
+        df["population"] = df["geo"].map(lambda x: pop_map.get(x, 10_000_000))
 
-    auxiliary_columns = list(dict.fromkeys([
-        *si_impression_cols,
-        *rf_reach_cols,
-        *rf_frequency_cols,
-        *organic_cols,
-        *treatment_cols,
-        *control_cols,
-        'population',
-        *[column for column in ('revenue', 'revenue_per_kpi', 'revenue_per_conversion') if column in df.columns],
-    ]))
+    auxiliary_columns = list(
+        dict.fromkeys(
+            [
+                *si_impression_cols,
+                *rf_reach_cols,
+                *rf_frequency_cols,
+                *organic_cols,
+                *treatment_cols,
+                *control_cols,
+                "population",
+                *[
+                    column
+                    for column in ("revenue", "revenue_per_kpi", "revenue_per_conversion")
+                    if column in df.columns
+                ],
+            ]
+        )
+    )
     if df[auxiliary_columns].isna().any().any():
         raise ValueError("Additional model inputs cannot contain missing values")
     try:
@@ -243,8 +271,12 @@ def fit_mmm_full(
         *rf_reach_cols,
         *rf_frequency_cols,
         *organic_cols,
-        'population',
-        *[column for column in ('revenue', 'revenue_per_kpi', 'revenue_per_conversion') if column in df.columns],
+        "population",
+        *[
+            column
+            for column in ("revenue", "revenue_per_kpi", "revenue_per_conversion")
+            if column in df.columns
+        ],
     ]
     if (df[list(dict.fromkeys(nonnegative_columns))] < 0).any().any():
         raise ValueError("Media, population, organic, and revenue inputs cannot be negative")
@@ -254,17 +286,23 @@ def fit_mmm_full(
     # ─── Build Meridian InputData ───
     from meridian.data import data_frame_input_data_builder
 
-    kpi_type = 'revenue' if kpi_column.lower() == 'revenue' else 'non_revenue'
+    kpi_type = "revenue" if kpi_column.lower() == "revenue" else "non_revenue"
     revenue_per_kpi_col = next(
-        (column for column in ('revenue_per_kpi', 'revenue_per_conversion') if column in df.columns),
+        (
+            column
+            for column in ("revenue_per_kpi", "revenue_per_conversion")
+            if column in df.columns
+        ),
         None,
     )
-    if kpi_type == 'non_revenue' and revenue_per_kpi_col is None and 'revenue' in df.columns:
-        invalid_revenue_rows = (df[kpi_column] == 0) & (df['revenue'] != 0)
+    if kpi_type == "non_revenue" and revenue_per_kpi_col is None and "revenue" in df.columns:
+        invalid_revenue_rows = (df[kpi_column] == 0) & (df["revenue"] != 0)
         if invalid_revenue_rows.any():
             raise ValueError("Revenue cannot be non-zero when KPI is zero")
-        revenue_per_kpi_col = '_revenue_per_kpi'
-        df[revenue_per_kpi_col] = df['revenue'].div(df[kpi_column].where(df[kpi_column] != 0)).fillna(0)
+        revenue_per_kpi_col = "_revenue_per_kpi"
+        df[revenue_per_kpi_col] = (
+            df["revenue"].div(df[kpi_column].where(df[kpi_column] != 0)).fillna(0)
+        )
 
     builder = data_frame_input_data_builder.DataFrameInputDataBuilder(
         kpi_type=kpi_type,
@@ -322,7 +360,7 @@ def fit_mmm_full(
     import tensorflow_probability as tfp
     from meridian.model import model, prior_distribution, spec
 
-    n_periods = df['time'].nunique()
+    n_periods = df["time"].nunique()
 
     # Configure priors - use calibration data if available
     # Build per-channel ROI priors: each channel gets its own LogNormal distribution
@@ -344,11 +382,15 @@ def fit_mmm_full(
                 p = calibration_priors[ch]
                 roi_means.append(p["roi_mean"])
                 roi_sigmas.append(p["roi_sigma"])
-                print(f"  {ch}: mean={p['roi_mean']:.2f}, sigma={p['roi_sigma']:.2f} (from {p.get('source', 'calibration')})")
+                print(
+                    f"  {ch}: mean={p['roi_mean']:.2f}, sigma={p['roi_sigma']:.2f} (from {p.get('source', 'calibration')})"
+                )
             else:
                 roi_means.append(default_roi_mean)
                 roi_sigmas.append(default_roi_sigma)
-                print(f"  {ch}: mean={default_roi_mean}, sigma={default_roi_sigma} (default, no calibration)")
+                print(
+                    f"  {ch}: mean={default_roi_mean}, sigma={default_roi_sigma} (default, no calibration)"
+                )
 
         # Single LogNormal with batch_shape=[n_media_channels]
         # If only 1 channel, use scalar to avoid batch_shape issues
@@ -386,13 +428,17 @@ def fit_mmm_full(
     # Build holdout mask if requested (out-of-time validation)
     holdout_id = None
     if holdout_weeks and holdout_weeks > 0:
-        n_geos = int(df['geo'].nunique())
+        n_geos = int(df["geo"].nunique())
         if holdout_weeks > n_periods // 2:
-            print(f"Warning: holdout_weeks ({holdout_weeks}) > half the data ({n_periods // 2}). Skipping holdout.")
+            print(
+                f"Warning: holdout_weeks ({holdout_weeks}) > half the data ({n_periods // 2}). Skipping holdout."
+            )
         else:
             holdout_id = np.zeros((n_geos, n_periods), dtype=bool)
             holdout_id[:, -holdout_weeks:] = True
-            print(f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)")
+            print(
+                f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)"
+            )
 
     # Determine knot strategy: AKS vs manual
     use_aks_min_periods = 26
@@ -431,7 +477,9 @@ def fit_mmm_full(
     print("Sampling from prior...")
     mmm.sample_prior(500)
 
-    print(f"Sampling posterior with {n_chains} chains, {n_keep} samples each (adapt={n_adapt}, burnin={n_burnin})...")
+    print(
+        f"Sampling posterior with {n_chains} chains, {n_keep} samples each (adapt={n_adapt}, burnin={n_burnin})..."
+    )
     mmm.sample_posterior(
         n_chains=n_chains,
         n_adapt=n_adapt,
@@ -440,6 +488,7 @@ def fit_mmm_full(
         seed=0,
     )
     print("Posterior sampling complete!")
+    log_event(run_logger, "posterior_sampling_completed")
 
     # Initialize results
     from importlib.metadata import version
@@ -448,18 +497,17 @@ def fit_mmm_full(
 
     results = {
         "timestamp": datetime.now().isoformat(),
-        "run_manifest": create_run_manifest(),
+        "run_manifest": run_manifest,
         "metadata": {
             "meridian_version": version("google-meridian"),
             "n_time_periods": n_periods,
-            "n_geos": int(df['geo'].nunique()),
+            "n_geos": int(df["geo"].nunique()),
             "channels": channels,
-            "total_spend": {
-                ch: float(df[spend_cols_by_channel[ch]].sum()) for ch in channels
-            },
+            "estimated_impression_channels": estimated_impression_channels,
+            "total_spend": {ch: float(df[spend_cols_by_channel[ch]].sum()) for ch in channels},
             "total_kpi": float(df[kpi_column].sum()),
             "kpi_type": kpi_type,
-            "roi_is_monetary": kpi_type == 'revenue' or revenue_per_kpi_col is not None,
+            "roi_is_monetary": kpi_type == "revenue" or revenue_per_kpi_col is not None,
             "config": {
                 "n_chains": n_chains,
                 "n_keep": n_keep,
@@ -494,9 +542,7 @@ def fit_mmm_full(
     # 1. ROI per channel
     print("Extracting ROI...")
     try:
-        results["roi"] = summarize_channel_tensor(
-            mmm_analyzer.roi(use_posterior=True), channels
-        )
+        results["roi"] = summarize_channel_tensor(mmm_analyzer.roi(use_posterior=True), channels)
     except Exception as e:
         print(f"Warning: ROI extraction failed: {e}")
         record_section_error(results, "roi", e, required=True)
@@ -505,9 +551,7 @@ def fit_mmm_full(
     print("Extracting CPIK...")
     try:
         cpik_summary = summarize_channel_tensor(mmm_analyzer.cpik(), channels)
-        results["cpik"] = {
-            channel: summary["mean"] for channel, summary in cpik_summary.items()
-        }
+        results["cpik"] = {channel: summary["mean"] for channel, summary in cpik_summary.items()}
     except Exception as e:
         print(f"Warning: CPIK extraction failed: {e}")
         record_section_error(results, "cpik", e)
@@ -530,14 +574,16 @@ def fit_mmm_full(
         if response_ds is not None:
             # Meridian 1.4.x returns xarray Dataset with dims: spend_multiplier, channel, metric
             # and data vars: spend, incremental_outcome
-            if 'incremental_outcome' in response_ds.data_vars and 'channel' in response_ds.dims:
+            if "incremental_outcome" in response_ds.data_vars and "channel" in response_ds.dims:
                 for ch in channels:
                     try:
                         # Get mean incremental outcome across the metric dimension
-                        ch_data = response_ds['incremental_outcome'].sel(channel=ch)
+                        ch_data = response_ds["incremental_outcome"].sel(channel=ch)
                         # metric dim has [mean, ci_lo, ci_hi] — take mean (index 0)
-                        if 'metric' in ch_data.dims:
-                            mean_response = ch_data.sel(metric=ch_data.coords['metric'].values[0]).values.tolist()
+                        if "metric" in ch_data.dims:
+                            mean_response = ch_data.sel(
+                                metric=ch_data.coords["metric"].values[0]
+                            ).values.tolist()
                         else:
                             mean_response = ch_data.values.tolist()
                         results["response_curves"][ch] = {
@@ -550,7 +596,9 @@ def fit_mmm_full(
                             "response": [],
                         }
             else:
-                print(f"  Response curves xarray: vars={list(response_ds.data_vars)}, dims={dict(response_ds.dims)}")
+                print(
+                    f"  Response curves xarray: vars={list(response_ds.data_vars)}, dims={dict(response_ds.dims)}"
+                )
     except Exception as e:
         print(f"Warning: Response curves extraction failed: {e}")
         record_section_error(results, "response_curves", e)
@@ -559,25 +607,35 @@ def fit_mmm_full(
     print("Extracting adstock decay...")
     try:
         adstock_data = mmm_analyzer.adstock_decay()
-        if adstock_data is not None and hasattr(adstock_data, 'columns'):
+        if adstock_data is not None and hasattr(adstock_data, "columns"):
             # DataFrame with columns: metric, channel, time_units, ..., mean, ...
             # Extract the decay at time_unit=1 (one-period decay rate) per channel
             for ch in channels:
-                ch_data = adstock_data[adstock_data['channel'] == ch] if 'channel' in adstock_data.columns else None
-                if ch_data is not None and len(ch_data) > 0 and 'mean' in ch_data.columns:
+                ch_data = (
+                    adstock_data[adstock_data["channel"] == ch]
+                    if "channel" in adstock_data.columns
+                    else None
+                )
+                if ch_data is not None and len(ch_data) > 0 and "mean" in ch_data.columns:
                     # Get decay at integer time points for a summary
-                    int_data = ch_data[ch_data.get('is_int_time_unit', pd.Series([True]*len(ch_data)))]
+                    int_data = ch_data[
+                        ch_data.get("is_int_time_unit", pd.Series([True] * len(ch_data)))
+                    ]
                     if len(int_data) > 1:
                         # Decay at t=1 gives the retention rate
-                        t1 = int_data[int_data['time_units'] == 1.0] if 'time_units' in int_data.columns else None
+                        t1 = (
+                            int_data[int_data["time_units"] == 1.0]
+                            if "time_units" in int_data.columns
+                            else None
+                        )
                         if t1 is not None and len(t1) > 0:
                             results["adstock_decay"][ch] = {
-                                "retention_at_1_period": float(t1['mean'].iloc[0]),
+                                "retention_at_1_period": float(t1["mean"].iloc[0]),
                             }
                         else:
                             # Just use the overall mean decay
                             results["adstock_decay"][ch] = {
-                                "mean_decay": float(ch_data['mean'].mean()),
+                                "mean_decay": float(ch_data["mean"].mean()),
                             }
     except Exception as e:
         print(f"Warning: Adstock decay extraction failed: {e}")
@@ -602,19 +660,23 @@ def fit_mmm_full(
         try:
             opt_freq = mmm_analyzer.optimal_freq()
             if opt_freq is not None:
-                if hasattr(opt_freq, 'numpy'):
+                if hasattr(opt_freq, "numpy"):
                     opt_freq_np = opt_freq.numpy()
                     opt_freq_mean = opt_freq_np.mean(axis=(0, 1))
                     for i, ch in enumerate(rf_channels):
                         results["optimal_frequency"][ch] = float(opt_freq_mean[i])
-                elif hasattr(opt_freq, 'data_vars'):
+                elif hasattr(opt_freq, "data_vars"):
                     # xarray Dataset with dims: frequency, rf_channel, metric
                     # and var: optimal_frequency
                     for ch in rf_channels:
                         try:
                             # Select by rf_channel first, then get optimal_frequency scalar
-                            ch_data = opt_freq.sel(rf_channel=ch) if 'rf_channel' in opt_freq.dims else opt_freq
-                            val = ch_data['optimal_frequency']
+                            ch_data = (
+                                opt_freq.sel(rf_channel=ch)
+                                if "rf_channel" in opt_freq.dims
+                                else opt_freq
+                            )
+                            val = ch_data["optimal_frequency"]
                             # val may have metric dim or be scalar
                             if val.dims:
                                 val = val.isel({d: 0 for d in val.dims})  # take first element
@@ -634,9 +696,11 @@ def fit_mmm_full(
         print("Extracting organic media contributions...")
         try:
             # Check if the model has organic media data
-            organic_media_ch = getattr(input_data, 'organic_media_channel', None)
+            organic_media_ch = getattr(input_data, "organic_media_channel", None)
             if organic_media_ch is not None:
-                print(f"  Model organic channels: {organic_media_ch.values if hasattr(organic_media_ch, 'values') else organic_media_ch}")
+                print(
+                    f"  Model organic channels: {organic_media_ch.values if hasattr(organic_media_ch, 'values') else organic_media_ch}"
+                )
             # Use expected_vs_actual_data which includes all components
             ev = mmm_analyzer.expected_vs_actual_data()
             if ev is not None:
@@ -670,9 +734,13 @@ def fit_mmm_full(
                         "included_in_model": True,
                     }
                     # Try to get the treatment effect from the baseline
-                    if 'baseline_outcome' in bs.data_vars:
-                        mean_val = bs['baseline_outcome'].sel(metric='mean', distribution='posterior')
-                        results["treatment_effects"][tname]["baseline_impact"] = float(mean_val.values)
+                    if "baseline_outcome" in bs.data_vars:
+                        mean_val = bs["baseline_outcome"].sel(
+                            metric="mean", distribution="posterior"
+                        )
+                        results["treatment_effects"][tname]["baseline_impact"] = float(
+                            mean_val.values
+                        )
         except Exception as e:
             print(f"Warning: Treatment effects extraction failed: {e}")
             record_section_error(results, "treatment_effects", e)
@@ -700,11 +768,13 @@ def fit_mmm_full(
                     "holdout_weeks": holdout_weeks,
                 }
                 # Extract in-sample and out-of-sample R-squared if available
-                if 'metric' in holdout_accuracy.dims or 'metric' in holdout_accuracy.coords:
-                    for metric_name in holdout_accuracy.coords.get('metric', holdout_accuracy.dims.get('metric', [])).values:
-                        metric_str = str(metric_name).lower().replace('_', '')
-                        if 'rsquared' in metric_str:
-                            val = holdout_accuracy.sel(metric=metric_name)['value'].values
+                if "metric" in holdout_accuracy.dims or "metric" in holdout_accuracy.coords:
+                    for metric_name in holdout_accuracy.coords.get(
+                        "metric", holdout_accuracy.dims.get("metric", [])
+                    ).values:
+                        metric_str = str(metric_name).lower().replace("_", "")
+                        if "rsquared" in metric_str:
+                            val = holdout_accuracy.sel(metric=metric_name)["value"].values
                             val_float = float(val.mean()) if val.size > 1 else float(val)
                             results["holdout_validation"]["r_squared"] = val_float
                 print(f"  Holdout validation: {results.get('holdout_validation', {})}")
@@ -720,11 +790,13 @@ def fit_mmm_full(
     except Exception as e:
         print(f"Warning: Diagnostics extraction failed: {e}")
         record_section_error(results, "diagnostics", e, required=True)
-        results["diagnostics"].update({
-            "convergence_ok": False,
-            "diagnostics_available": False,
-            "error": str(e),
-        })
+        results["diagnostics"].update(
+            {
+                "convergence_ok": False,
+                "diagnostics_available": False,
+                "error": str(e),
+            }
+        )
 
     # 8. ModelReviewer (diagnostic checks)
     print("Running ModelReviewer...")
@@ -757,13 +829,15 @@ def fit_mmm_full(
     print("Generating native Meridian charts...")
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from meridian.analysis import visualizer
 
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         chart_dir = f"/outputs/charts_{timestamp}"
         import os
+
         os.makedirs(chart_dir, exist_ok=True)
 
         results["charts"] = {}
@@ -792,8 +866,8 @@ def fit_mmm_full(
                 chart = plot_fn()
                 chart_path = f"{chart_dir}/{chart_name}"
                 save_chart(chart, chart_path)
-                plt.close('all')
-                results["charts"][chart_name.replace('.png', '')] = chart_path
+                plt.close("all")
+                results["charts"][chart_name.replace(".png", "")] = chart_path
                 print(f"  Saved {chart_name}")
             except Exception as e_chart:
                 print(f"  Warning: {chart_name} failed: {e_chart}")
@@ -837,14 +911,18 @@ def fit_mmm_full(
 
     print("Results extracted successfully!")
     manifest = finalize_run_manifest(results)
-    print(
-        f"Run status: {manifest['status']}; "
-        f"model quality: {manifest['quality_status']}"
+    log_event(
+        run_logger,
+        "run_completed",
+        status=manifest["status"],
+        quality_status=manifest["quality_status"],
+        errors=len(manifest["errors"]),
     )
+    print(f"Run status: {manifest['status']}; model quality: {manifest['quality_status']}")
 
     # Save to volume
     output_path = f"/outputs/full_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"Results saved to {output_path}")
 
@@ -888,12 +966,16 @@ def main(
         infer_calibration_metric,
         load_calibration,
     )
+    from mmm.observability import configure_run_logger, log_event, new_run_id
     from mmm.result_manifest import finalize_run_manifest, record_section_error
 
     data_path = Path(data)
     if not data_path.exists():
         raise FileNotFoundError(f"Data file not found: {data}")
 
+    run_id = new_run_id()
+    run_logger = configure_run_logger(run_id, "local")
+    log_event(run_logger, "input_read_started", data_path=str(data_path))
     print(f"Reading data from {data_path}...")
     data_csv = data_path.read_text()
     columns = next(csv.reader(io.StringIO(data_csv)))
@@ -932,6 +1014,7 @@ def main(
     print("Submitting full analysis to Modal GPU...")
     print("(This may take 30-45 minutes)")
     print()
+    log_event(run_logger, "remote_submission_started")
 
     results = fit_mmm_full.remote(
         data_csv=data_csv,
@@ -945,6 +1028,13 @@ def main(
         holdout_weeks=holdout_weeks,
         allow_population_estimates=allow_population_estimates,
         allow_impression_estimates=allow_impression_estimates,
+        run_id=run_id,
+    )
+    log_event(
+        run_logger,
+        "remote_submission_completed",
+        status=results.get("run_manifest", {}).get("status", "unknown"),
+        quality_status=results.get("run_manifest", {}).get("quality_status", "unknown"),
     )
 
     # Print summary
@@ -953,7 +1043,9 @@ def main(
     print("=" * 60)
 
     roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
-    roi_label = "Channel ROI (Return on Investment)" if roi_is_monetary else "Channel KPI Efficiency"
+    roi_label = (
+        "Channel ROI (Return on Investment)" if roi_is_monetary else "Channel KPI Efficiency"
+    )
     roi_suffix = "x" if roi_is_monetary else " KPI/currency"
     print(f"\n## {roi_label}")
     print("-" * 40)
@@ -961,14 +1053,13 @@ def main(
         mean = data.get("mean", 0)
         ci_lo = data.get("ci_lower", 0)
         ci_hi = data.get("ci_upper", 0)
-        print(
-            f"  {ch:12s}: {mean:.2f}{roi_suffix}  "
-            f"(90% CI: {ci_lo:.2f} - {ci_hi:.2f})"
-        )
+        print(f"  {ch:12s}: {mean:.2f}{roi_suffix}  (90% CI: {ci_lo:.2f} - {ci_hi:.2f})")
 
     print("\n## Channel Contributions")
     print("-" * 40)
-    for ch, data in sorted(results.get("contributions", {}).items(), key=lambda x: -x[1].get("percentage", 0)):
+    for ch, data in sorted(
+        results.get("contributions", {}).items(), key=lambda x: -x[1].get("percentage", 0)
+    ):
         pct = data.get("percentage", 0)
         print(f"  {ch:12s}: {pct:.1f}%")
 
@@ -995,12 +1086,17 @@ def main(
         print(f"\n[!] Model convergence: {warnings} parameters with R-hat > 1.1")
 
     # Save results
-    output_path = Path("outputs") / f"full_results_{results['timestamp'].replace(':', '-').replace('.', '-')}.json"
+    output_path = (
+        Path("outputs")
+        / f"full_results_{results['timestamp'].replace(':', '-').replace('.', '-')}.json"
+    )
     output_path.parent.mkdir(exist_ok=True)
 
     # Native chart paths point into the remote Modal Volume. Download them so
     # the local HTML report can actually embed the charts it was promised.
-    local_chart_dir = output_path.parent / f"charts_{output_path.stem.removeprefix('full_results_')}"
+    local_chart_dir = (
+        output_path.parent / f"charts_{output_path.stem.removeprefix('full_results_')}"
+    )
     downloaded_charts = {}
     for chart_name, remote_path in results.get("charts", {}).items():
         try:
@@ -1013,10 +1109,17 @@ def main(
         except Exception as e:
             print(f"Warning: Could not download chart {chart_name}: {e}")
             record_section_error(results, "charts", e)
+            log_event(run_logger, "chart_download_failed", chart=chart_name, error=str(e))
     results["charts"] = downloaded_charts
     manifest = finalize_run_manifest(results)
 
     output_path.write_text(json.dumps(results, indent=2, default=str))
+    log_event(
+        run_logger,
+        "artifacts_written",
+        results_path=str(output_path),
+        charts=len(downloaded_charts),
+    )
     print(f"\nFull results saved to: {output_path}")
 
     if manifest["status"] == "failed":
@@ -1034,7 +1137,7 @@ def main(
         print("\nGenerating HTML report...")
         from mmm.analysis.visualize import generate_html_report
 
-        report_path = output_path.with_suffix('.html')
+        report_path = output_path.with_suffix(".html")
         generate_html_report(results, report_path)
         print(f"Report saved to: {report_path}")
 

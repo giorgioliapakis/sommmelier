@@ -9,6 +9,9 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from mmm.result_manifest import decision_readiness
 
 from .improvement_advisor import (
     ImprovementQuestion,
@@ -19,6 +22,7 @@ from .improvement_advisor import (
 @dataclass
 class Recommendation:
     """A single recommendation."""
+
     category: str  # "budget", "channel", "model", "data"
     priority: str  # "high", "medium", "low"
     title: str
@@ -30,26 +34,30 @@ class Recommendation:
 @dataclass
 class AnalysisReport:
     """Complete analysis report with recommendations."""
+
     timestamp: str
     summary: str
     recommendations: list[Recommendation] = field(default_factory=list)
     improvement_questions: list[ImprovementQuestion] = field(default_factory=list)
-    budget_reallocation: dict = field(default_factory=dict)
-    model_health: dict = field(default_factory=dict)
-    week_over_week: dict = field(default_factory=dict)
+    budget_reallocation: dict[str, Any] = field(default_factory=dict)
+    model_health: dict[str, Any] = field(default_factory=dict)
+    week_over_week: dict[str, Any] = field(default_factory=dict)
 
 
-def load_results(path: Path | str) -> dict:
+def load_results(path: Path | str) -> dict[str, Any]:
     """Load results from JSON file."""
     path = Path(path)
     with open(path) as f:
-        return json.load(f)
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Results JSON must contain an object: {path}")
+    return data
 
 
-def load_historical_results(outputs_dir: Path | str) -> list[dict]:
+def load_historical_results(outputs_dir: Path | str) -> list[dict[str, Any]]:
     """Load all historical results, sorted by timestamp."""
     outputs_dir = Path(outputs_dir)
-    results = []
+    results: list[dict[str, Any]] = []
 
     for f in outputs_dir.glob("full_results_*.json"):
         try:
@@ -65,18 +73,15 @@ def load_historical_results(outputs_dir: Path | str) -> list[dict]:
     return results
 
 
-def analyze_roi(results: dict) -> list[Recommendation]:
+def analyze_roi(results: dict[str, Any]) -> list[Recommendation]:
     """Analyze ROI and generate recommendations."""
-    recommendations = []
+    recommendations: list[Recommendation] = []
     roi_data = results.get("roi", {})
     roi_is_monetary = results.get("metadata", {}).get("roi_is_monetary", False)
 
     if not roi_data:
         # Handle simple format
-        roi_data = {
-            ch: {"mean": val}
-            for ch, val in results.get("channel_roi", {}).items()
-        }
+        roi_data = {ch: {"mean": val} for ch, val in results.get("channel_roi", {}).items()}
 
     if not roi_data:
         return recommendations
@@ -103,7 +108,7 @@ def analyze_roi(results: dict) -> list[Recommendation]:
     sorted_channels = sorted(
         roi_data.items(),
         key=lambda x: x[1].get("mean", 0) if isinstance(x[1], dict) else x[1],
-        reverse=True
+        reverse=True,
     )
 
     # Check for underperforming channels (ROI < 0.5)
@@ -111,53 +116,56 @@ def analyze_roi(results: dict) -> list[Recommendation]:
         roi = data.get("mean", data) if isinstance(data, dict) else data
 
         if roi < 0.3:
-            recommendations.append(Recommendation(
-                category="channel",
-                priority="high",
-                title=f"Consider pausing {ch.title()}",
-                detail=f"{ch.title()} has an ROI of {roi:.2f}x, meaning you lose ${1-roi:.2f} for every $1 spent.",
-                action=f"Reduce or pause {ch} spend and reallocate to higher-performing channels.",
-                impact=f"Could save ~${results.get('metadata', {}).get('total_spend', {}).get(ch, 0) * (1-roi):,.0f}"
-            ))
+            recommendations.append(
+                Recommendation(
+                    category="channel",
+                    priority="high",
+                    title=f"Consider pausing {ch.title()}",
+                    detail=f"{ch.title()} has an ROI of {roi:.2f}x, meaning you lose ${1 - roi:.2f} for every $1 spent.",
+                    action=f"Reduce or pause {ch} spend and reallocate to higher-performing channels.",
+                    impact=f"Could save ~${results.get('metadata', {}).get('total_spend', {}).get(ch, 0) * (1 - roi):,.0f}",
+                )
+            )
         elif roi < 0.5:
-            recommendations.append(Recommendation(
-                category="channel",
-                priority="medium",
-                title=f"{ch.title()} is underperforming",
-                detail=f"ROI of {roi:.2f}x is below breakeven. Review targeting and creative.",
-                action="Test new audiences or creative before cutting budget.",
-                impact=None
-            ))
+            recommendations.append(
+                Recommendation(
+                    category="channel",
+                    priority="medium",
+                    title=f"{ch.title()} is underperforming",
+                    detail=f"ROI of {roi:.2f}x is below breakeven. Review targeting and creative.",
+                    action="Test new audiences or creative before cutting budget.",
+                    impact=None,
+                )
+            )
 
     # Check for high-performing channels that could scale
     best_ch, best_data = sorted_channels[0]
     best_roi = best_data.get("mean", best_data) if isinstance(best_data, dict) else best_data
 
     if best_roi > 1.0:
-        recommendations.append(Recommendation(
-            category="channel",
-            priority="high",
-            title=f"{best_ch.title()} is highly profitable",
-            detail=f"ROI of {best_roi:.2f}x means every $1 returns ${best_roi:.2f}.",
-            action="Test increasing budget if marginal ROI supports it.",
-            impact=None
-        ))
+        recommendations.append(
+            Recommendation(
+                category="channel",
+                priority="high",
+                title=f"{best_ch.title()} is highly profitable",
+                detail=f"ROI of {best_roi:.2f}x means every $1 returns ${best_roi:.2f}.",
+                action="Test increasing budget if marginal ROI supports it.",
+                impact=None,
+            )
+        )
 
     return recommendations
 
 
-def analyze_marginal_roi(results: dict) -> list[Recommendation]:
+def analyze_marginal_roi(results: dict[str, Any]) -> list[Recommendation]:
     """Analyze marginal ROI to find saturation and growth opportunities."""
-    recommendations = []
+    recommendations: list[Recommendation] = []
 
     roi_data = results.get("roi", {})
     mroi_data = results.get("marginal_roi", {})
 
     if not roi_data:
-        roi_data = {
-            ch: {"mean": val}
-            for ch, val in results.get("channel_roi", {}).items()
-        }
+        roi_data = {ch: {"mean": val} for ch, val in results.get("channel_roi", {}).items()}
 
     if not mroi_data:
         return recommendations
@@ -173,31 +181,35 @@ def analyze_marginal_roi(results: dict) -> list[Recommendation]:
 
         if ratio < 0.5:
             # Saturated - marginal ROI much lower than average
-            recommendations.append(Recommendation(
-                category="budget",
-                priority="high",
-                title=f"{ch.title()} is saturated",
-                detail=f"Marginal ROI ({mroi:.2f}x) is {(1-ratio)*100:.0f}% lower than average ROI ({avg_roi:.2f}x).",
-                action=f"Reduce {ch} budget - you're past the point of diminishing returns.",
-                impact="Reallocating budget could improve overall ROAS"
-            ))
+            recommendations.append(
+                Recommendation(
+                    category="budget",
+                    priority="high",
+                    title=f"{ch.title()} is saturated",
+                    detail=f"Marginal ROI ({mroi:.2f}x) is {(1 - ratio) * 100:.0f}% lower than average ROI ({avg_roi:.2f}x).",
+                    action=f"Reduce {ch} budget - you're past the point of diminishing returns.",
+                    impact="Reallocating budget could improve overall ROAS",
+                )
+            )
         elif ratio > 1.2:
             # Room to grow - marginal ROI higher than average
-            recommendations.append(Recommendation(
-                category="budget",
-                priority="medium",
-                title=f"{ch.title()} has room to scale",
-                detail=f"Marginal ROI ({mroi:.2f}x) exceeds average ROI ({avg_roi:.2f}x).",
-                action=f"Test increasing {ch} budget - additional spend should be efficient.",
-                impact=None
-            ))
+            recommendations.append(
+                Recommendation(
+                    category="budget",
+                    priority="medium",
+                    title=f"{ch.title()} has room to scale",
+                    detail=f"Marginal ROI ({mroi:.2f}x) exceeds average ROI ({avg_roi:.2f}x).",
+                    action=f"Test increasing {ch} budget - additional spend should be efficient.",
+                    impact=None,
+                )
+            )
 
     return recommendations
 
 
-def analyze_contributions(results: dict) -> list[Recommendation]:
+def analyze_contributions(results: dict[str, Any]) -> list[Recommendation]:
     """Analyze contribution distribution."""
-    recommendations = []
+    recommendations: list[Recommendation] = []
 
     contrib_data = results.get("contributions", {})
     if not contrib_data:
@@ -210,37 +222,38 @@ def analyze_contributions(results: dict) -> list[Recommendation]:
         return recommendations
 
     # Normalize to ensure we have percentage
-    def get_pct(data):
+    def get_pct(data: Any) -> float:
         if isinstance(data, dict):
-            return data.get("percentage", 0)
-        return data * 100 if data < 1 else data
+            return float(data.get("percentage", 0))
+        value = float(data)
+        return value * 100 if value < 1 else value
 
     # Check for over-concentration
-    sorted_contrib = sorted(
-        contrib_data.items(),
-        key=lambda x: get_pct(x[1]),
-        reverse=True
-    )
+    sorted_contrib = sorted(contrib_data.items(), key=lambda x: get_pct(x[1]), reverse=True)
 
     top_ch, top_data = sorted_contrib[0]
     top_pct = get_pct(top_data)
 
     if top_pct > 70:
-        recommendations.append(Recommendation(
-            category="budget",
-            priority="medium",
-            title="High channel concentration risk",
-            detail=f"{top_ch.title()} drives {top_pct:.0f}% of conversions. This creates platform dependency.",
-            action="Consider diversifying budget across channels to reduce risk.",
-            impact=None
-        ))
+        recommendations.append(
+            Recommendation(
+                category="budget",
+                priority="medium",
+                title="High channel concentration risk",
+                detail=f"{top_ch.title()} drives {top_pct:.0f}% of the modeled KPI. This creates platform dependency.",
+                action="Consider diversifying budget across channels to reduce risk.",
+                impact=None,
+            )
+        )
 
     return recommendations
 
 
-def analyze_model_quality(results: dict) -> tuple[dict, list[Recommendation]]:
+def analyze_model_quality(
+    results: dict[str, Any],
+) -> tuple[dict[str, Any], list[Recommendation]]:
     """Assess model quality and suggest improvements."""
-    recommendations = []
+    recommendations: list[Recommendation] = []
     health = {
         "convergence": "unknown",
         "data_sufficiency": "unknown",
@@ -255,27 +268,31 @@ def analyze_model_quality(results: dict) -> tuple[dict, list[Recommendation]]:
         health["convergence"] = "good"
     elif diagnostics.get("rhat_warnings", 0) > 0:
         health["convergence"] = "warning"
-        recommendations.append(Recommendation(
-            category="model",
-            priority="high",
-            title="Model convergence issues detected",
-            detail=f"{diagnostics['rhat_warnings']} parameters have R-hat > 1.1, indicating MCMC didn't converge.",
-            action="Run with more samples (n_keep=1000) or check for data issues.",
-            impact="Results may be unreliable"
-        ))
+        recommendations.append(
+            Recommendation(
+                category="model",
+                priority="high",
+                title="Model convergence issues detected",
+                detail=f"{diagnostics['rhat_warnings']} parameters have R-hat > 1.1, indicating MCMC didn't converge.",
+                action="Run with more samples (n_keep=1000) or check for data issues.",
+                impact="Results may be unreliable",
+            )
+        )
 
     # Check data sufficiency
     n_periods = metadata.get("n_time_periods", 0)
     if n_periods < 26:
         health["data_sufficiency"] = "insufficient"
-        recommendations.append(Recommendation(
-            category="data",
-            priority="high" if n_periods < 13 else "medium",
-            title="Insufficient time periods",
-            detail=f"Only {n_periods} periods. Meridian recommends 26+ for reliable estimates.",
-            action="Accumulate more weekly data before making major budget decisions.",
-            impact="Wide confidence intervals, uncertain estimates"
-        ))
+        recommendations.append(
+            Recommendation(
+                category="data",
+                priority="high" if n_periods < 13 else "medium",
+                title="Insufficient time periods",
+                detail=f"Only {n_periods} periods. Meridian recommends 26+ for reliable estimates.",
+                action="Accumulate more weekly data before making major budget decisions.",
+                impact="Wide confidence intervals, uncertain estimates",
+            )
+        )
     elif n_periods < 52:
         health["data_sufficiency"] = "adequate"
     else:
@@ -296,23 +313,25 @@ def analyze_model_quality(results: dict) -> tuple[dict, list[Recommendation]]:
 
     if wide_ci_channels:
         health["confidence"] = "low"
-        recommendations.append(Recommendation(
-            category="model",
-            priority="medium",
-            title="High uncertainty in estimates",
-            detail=f"Channels with wide confidence intervals: {', '.join(wide_ci_channels)}",
-            action="Need more data or adjust priors for these channels.",
-            impact="Recommendations for these channels are less certain"
-        ))
+        recommendations.append(
+            Recommendation(
+                category="model",
+                priority="medium",
+                title="High uncertainty in estimates",
+                detail=f"Channels with wide confidence intervals: {', '.join(wide_ci_channels)}",
+                action="Need more data or adjust priors for these channels.",
+                impact="Recommendations for these channels are less certain",
+            )
+        )
     else:
         health["confidence"] = "good"
 
     return health, recommendations
 
 
-def calculate_budget_reallocation(results: dict) -> dict:
+def calculate_budget_reallocation(results: dict[str, Any]) -> dict[str, Any]:
     """Use Meridian's fitted optimizer output for a same-budget reallocation."""
-    reallocation = {
+    reallocation: dict[str, Any] = {
         "current": {},
         "suggested": {},
         "change": {},
@@ -320,11 +339,7 @@ def calculate_budget_reallocation(results: dict) -> dict:
 
     metadata = results.get("metadata", {})
     current_spend = metadata.get("total_spend", {})
-    optimized = (
-        results.get("optimization", {})
-        .get("current", {})
-        .get("optimal_allocation", {})
-    )
+    optimized = results.get("optimization", {}).get("current", {}).get("optimal_allocation", {})
 
     if not optimized or not current_spend:
         return reallocation
@@ -338,9 +353,9 @@ def calculate_budget_reallocation(results: dict) -> dict:
     return reallocation
 
 
-def compare_to_previous(current: dict, previous: dict) -> dict:
+def compare_to_previous(current: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any]:
     """Compare current results to previous run."""
-    comparison = {
+    comparison: dict[str, Any] = {
         "has_previous": previous is not None,
         "roi_changes": {},
         "contribution_changes": {},
@@ -354,7 +369,11 @@ def compare_to_previous(current: dict, previous: dict) -> dict:
     prev_roi = previous.get("roi", previous.get("channel_roi", {}))
 
     for ch in curr_roi:
-        curr_val = curr_roi[ch].get("mean", curr_roi[ch]) if isinstance(curr_roi[ch], dict) else curr_roi[ch]
+        curr_val = (
+            curr_roi[ch].get("mean", curr_roi[ch])
+            if isinstance(curr_roi[ch], dict)
+            else curr_roi[ch]
+        )
         prev_val = prev_roi.get(ch, {})
         prev_val = prev_val.get("mean", prev_val) if isinstance(prev_val, dict) else prev_val
 
@@ -369,13 +388,18 @@ def compare_to_previous(current: dict, previous: dict) -> dict:
     return comparison
 
 
-def generate_analysis(results_path: Path | str, outputs_dir: Path | str = "outputs") -> AnalysisReport:
+def generate_analysis(
+    results_path: Path | str, outputs_dir: Path | str = "outputs"
+) -> AnalysisReport:
     """
     Generate complete analysis report with recommendations.
 
     This is the main entry point for Claude Code to analyze results.
     """
     results = load_results(results_path)
+    ready, reason = decision_readiness(results)
+    if not ready:
+        raise ValueError(f"Recommendations blocked: {reason}")
 
     # Load historical results for comparison
     historical = load_historical_results(outputs_dir)
@@ -461,7 +485,9 @@ def format_report_for_claude(report: AnalysisReport) -> str:
             suggested = report.budget_reallocation["suggested"].get(ch, current)
             change = report.budget_reallocation["change"].get(ch, 0)
             direction = "+" if change > 0 else ""
-            lines.append(f"  {ch:12s}: ${current:>10,.0f} → ${suggested:>10,.0f} ({direction}{change:,.0f})")
+            lines.append(
+                f"  {ch:12s}: ${current:>10,.0f} → ${suggested:>10,.0f} ({direction}{change:,.0f})"
+            )
 
     # Model health
     lines.append("\n" + "-" * 40)
@@ -479,7 +505,9 @@ def format_report_for_claude(report: AnalysisReport) -> str:
         for ch, data in report.week_over_week.get("roi_changes", {}).items():
             change = data["change_pct"]
             direction = "+" if change > 0 else ""
-            lines.append(f"  {ch:12s} ROI: {data['previous']:.2f}x → {data['current']:.2f}x ({direction}{change:.1f}%)")
+            lines.append(
+                f"  {ch:12s} ROI: {data['previous']:.2f}x → {data['current']:.2f}x ({direction}{change:.1f}%)"
+            )
 
     # Improvement questions (the self-improving part)
     if report.improvement_questions:
@@ -489,7 +517,11 @@ def format_report_for_claude(report: AnalysisReport) -> str:
         lines.append("\nProvide any of this data to improve accuracy:\n")
 
         for i, q in enumerate(report.improvement_questions[:5], 1):
-            priority_marker = {"high": "[HIGH IMPACT]", "medium": "[MEDIUM]", "low": "[NICE TO HAVE]"}.get(q.priority, "")
+            priority_marker = {
+                "high": "[HIGH IMPACT]",
+                "medium": "[MEDIUM]",
+                "low": "[NICE TO HAVE]",
+            }.get(q.priority, "")
             lines.append(f"{i}. {priority_marker} {q.question}")
             lines.append(f"   Why: {q.why_it_helps[:150]}...")
             if q.impact_estimate:

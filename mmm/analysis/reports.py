@@ -29,6 +29,8 @@ def generate_report(
 
     results = mmm.results
     dataset = mmm.dataset
+    if results is None:
+        raise ValueError("Model results are unavailable")
 
     # Build report sections
     sections = []
@@ -54,28 +56,37 @@ Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 | Total KPI | {dataset.total_kpi:,.0f} |
 
 ### Media Channels
-{', '.join(dataset.media_channels)}
+{", ".join(dataset.media_channels)}
 
 ---
 """)
 
-    # Model Results
-    sections.append("""## Model Results
+    metric_heading = "Channel ROI" if results.roi_is_monetary else "Channel KPI Efficiency"
+    metric_column = "ROI" if results.roi_is_monetary else "KPI / currency"
+    sections.append(f"""## Model Results
 
-### Channel ROI
-| Channel | ROI | Interpretation |
+### {metric_heading}
+| Channel | {metric_column} | Interpretation |
 |---------|-----|----------------|
 """)
 
     if results and results.channel_roi:
         for channel, roi in sorted(results.channel_roi.items(), key=lambda x: -x[1]):
-            interpretation = (
-                "Strong performer" if roi > 1.5
-                else "Good" if roi > 1.0
-                else "Break-even" if roi > 0.8
-                else "Underperforming"
-            )
-            sections.append(f"| {channel} | {roi:.2f}x | {interpretation} |\n")
+            if results.roi_is_monetary:
+                interpretation = (
+                    "Strong performer"
+                    if roi > 1.5
+                    else "Good"
+                    if roi > 1.0
+                    else "Break-even"
+                    if roi > 0.8
+                    else "Underperforming"
+                )
+                value = f"{roi:.2f}x"
+            else:
+                interpretation = "Compare with CPIK and uncertainty; not a profit measure"
+                value = f"{roi:.4f} KPI/currency"
+            sections.append(f"| {channel} | {value} | {interpretation} |\n")
 
     sections.append("\n")
 

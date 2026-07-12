@@ -39,6 +39,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "pandas-stubs>=2.2.0",
 ]
 gpu = [
     "google-meridian[and-cuda,schema]>=1.6.2,<1.7",
@@ -60,10 +61,16 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]  # Ruff's formatter intentionally leaves long strings and comments intact.
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["meridian.*", "tensorflow_probability.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

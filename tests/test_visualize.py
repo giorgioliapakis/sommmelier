@@ -16,9 +16,7 @@ def test_html_report_escapes_channel_names(tmp_path):
             "roi_is_monetary": True,
         },
         "roi": {"<script>alert(1)</script>": {"mean": 1.2}},
-        "contributions": {
-            "<script>alert(1)</script>": {"percentage": 100, "absolute": 200}
-        },
+        "contributions": {"<script>alert(1)</script>": {"percentage": 100, "absolute": 200}},
         "run_manifest": {"status": "complete", "quality_status": "failed"},
     }
 

@@ -20,11 +20,13 @@ OPTIONAL_SECTIONS = (
 )
 
 
-def create_run_manifest(started_at: str | None = None) -> dict[str, Any]:
+def create_run_manifest(
+    started_at: str | None = None, *, run_id: str | None = None
+) -> dict[str, Any]:
     """Create the initial state attached to every result payload."""
     return {
         "schema_version": 1,
-        "run_id": str(uuid4()),
+        "run_id": run_id or str(uuid4()),
         "started_at": started_at or datetime.now(UTC).isoformat(),
         "completed_at": None,
         "status": "running",
@@ -80,9 +82,7 @@ def finalize_run_manifest(
     }
 
     required_failures = [
-        section
-        for section in REQUIRED_SECTIONS
-        if manifest["sections"][section] != "complete"
+        section for section in REQUIRED_SECTIONS if manifest["sections"][section] != "complete"
     ]
     if required_failures:
         manifest["status"] = "failed"
