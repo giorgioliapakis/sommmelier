@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-from mmm.data import load_mmm_data, validate_dataset
+import pandas as pd
+
+from mmm.data import load_mmm_data, load_mmm_dataframe, validate_dataset
 from mmm.data.schema import DataConfig, MMMDataset
 from mmm.data.validator import check_meridian_compatibility
 from mmm.validation.holdout import generate_holdout_mask
@@ -24,6 +26,29 @@ def preflight_data_path(
             allow_impression_estimates=allow_impression_estimates,
         ),
     )
+    return _require_valid_dataset(dataset)
+
+
+def preflight_dataframe(
+    frame: pd.DataFrame,
+    *,
+    kpi_column: str = "conversions",
+    allow_population_estimates: bool = False,
+    allow_impression_estimates: bool = False,
+) -> MMMDataset:
+    """Validate an in-memory frame before model construction or paid compute."""
+    dataset = load_mmm_dataframe(
+        frame,
+        DataConfig(
+            kpi_column=kpi_column,
+            allow_population_estimates=allow_population_estimates,
+            allow_impression_estimates=allow_impression_estimates,
+        ),
+    )
+    return _require_valid_dataset(dataset)
+
+
+def _require_valid_dataset(dataset: MMMDataset) -> MMMDataset:
     report = validate_dataset(dataset)
     compatibility_issues = check_meridian_compatibility(dataset)
     if not report.passed or compatibility_issues:

@@ -136,13 +136,22 @@ def load_mmm_data(
     Returns:
         MMMDataset object ready for Meridian
     """
+    df = load_csv(path)
+    return load_mmm_dataframe(df, config)
+
+
+def load_mmm_dataframe(
+    df: pd.DataFrame,
+    config: DataConfig | None = None,
+) -> MMMDataset:
+    """Build an MMM dataset from an in-memory frame using the shared loader contract."""
     if config is None:
         config = DataConfig()
     else:
         # Detection fills empty configuration fields. Do not mutate a caller-owned model.
         config = config.model_copy(deep=True)
 
-    df = load_csv(path)
+    df = df.copy()
     if (
         config.date_column not in df.columns
         and config.date_column == "date"

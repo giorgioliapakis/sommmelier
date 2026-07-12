@@ -64,7 +64,6 @@ def fit_mmm_full(
     import numpy as np
     import pandas as pd
 
-    from mmm.detection import detect_columns
     from mmm.meridian_compat import (
         extract_channel_contributions,
         extract_non_paid_contributions,
@@ -76,6 +75,7 @@ def fit_mmm_full(
         summarize_channel_tensor,
     )
     from mmm.observability import configure_run_logger, log_event
+    from mmm.preflight import preflight_dataframe
     from mmm.result_manifest import (
         create_run_manifest,
         finalize_run_manifest,
@@ -113,248 +113,52 @@ def fit_mmm_full(
 
     print(f"TensorFlow GPUs: {tf.config.list_physical_devices('GPU')}")
 
-    # Load and prepare data
-    df = pd.read_csv(io.StringIO(data_csv))
-
-    # Handle date column (could be 'date' or 'time')
-    if "date" in df.columns:
-        df = df.rename(columns={"date": "time"})
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"])
-
-    print(
-        f"Loaded data: {len(df)} rows, {df['geo'].nunique()} geos, {df['time'].nunique()} periods"
+    # Load, validate, and build through the same package contracts used locally.
+    dataset = preflight_dataframe(
+        pd.read_csv(io.StringIO(data_csv)),
+        kpi_column=kpi_column,
+        allow_population_estimates=allow_population_estimates,
+        allow_impression_estimates=allow_impression_estimates,
     )
+    config = dataset.config
+    df = dataset.df.rename(columns={config.date_column: "time", config.geo_column: "geo"})
 
-    # ─── Auto-detect channels and variable types from column names ───
-    detected = detect_columns(df.columns)
+    from mmm.model.builder import build_meridian_input
 
-    # Separate channels into spend+impressions vs reach+frequency
-    si_channels = []  # spend+impressions channel names
-    si_impression_cols = []
-    si_spend_cols = []
-    rf_channels = []  # reach+frequency channel names
-    rf_reach_cols = []
-    rf_frequency_cols = []
-    rf_spend_cols = []
-    estimated_impression_channels = []
-
-    spend_cols_by_channel = {}
-    for channel in detected.media_channels:
-        ch = channel["name"]
-        spend_col = channel["spend_column"]
-        reach_col = channel["reach_column"]
-        freq_col = channel["frequency_column"]
-        spend_cols_by_channel[ch] = spend_col
-
-        if reach_col and freq_col:
-            # R&F channel
-            rf_channels.append(ch)
-            rf_reach_cols.append(reach_col)
-            rf_frequency_cols.append(freq_col)
-            rf_spend_cols.append(spend_col)
-            print(f"  {ch}: reach+frequency channel")
-        elif reach_col and not freq_col:
-            print(f"  Warning: {ch} has _reach but no _frequency — treating as spend+impressions")
-            # Fall through to spend+impressions
-        elif freq_col and not reach_col:
-            print(f"  Warning: {ch} has _frequency but no _reach — treating as spend+impressions")
-            # Fall through to spend+impressions
-
-        if not (reach_col and freq_col):
-            # Spend+impressions channel
-            si_channels.append(ch)
-            si_spend_cols.append(spend_col)
-
-            imp_col = channel["impressions_column"]
-
-            if imp_col is None:
-                if not allow_impression_estimates:
-                    raise ValueError(
-                        f"Channel '{ch}' needs impressions or reach/frequency data. "
-                        "Pass --allow-impression-estimates only when the coarse "
-                        "$10 CPM fallback is acceptable."
-                    )
-                imp_col = f"{ch}_impression"
-                df[imp_col] = df[spend_col] * 100  # Assume $10 CPM
-                estimated_impression_channels.append(ch)
-                print(f"  Estimated impressions for {ch} from spend")
-
-            si_impression_cols.append(imp_col)
-
-    # All paid media channels (spend+impressions + R&F) — used for priors, ROI, etc.
-    channels = si_channels + rf_channels
-    if not channels:
-        raise ValueError("No paid media columns ending in '_spend' were found")
-
-    duplicate_rows = int(df.duplicated(["geo", "time"]).sum())
-    if duplicate_rows:
-        raise ValueError(f"Found {duplicate_rows} duplicate geo/time rows")
-    expected_rows = int(df["geo"].nunique() * df["time"].nunique())
-    if len(df) != expected_rows:
-        raise ValueError(
-            f"Geo/time panel is incomplete: expected {expected_rows} rows, found {len(df)}"
-        )
-    unique_dates = pd.Series(df["time"].drop_duplicates().sort_values())
-    cadence_days = unique_dates.diff().dropna().dt.days
-    irregular_cadence = sorted(set(cadence_days[cadence_days != 7].astype(int).tolist()))
-    if irregular_cadence:
-        raise ValueError(
-            "Model data must use exact weekly cadence; found gaps of "
-            + ", ".join(map(str, irregular_cadence))
-            + " days"
-        )
-    numeric_columns = [kpi_column, *spend_cols_by_channel.values()]
-    if df[numeric_columns].isna().any().any():
-        raise ValueError("KPI and spend columns cannot contain missing values")
-    if not np.isfinite(df[numeric_columns].to_numpy()).all():
-        raise ValueError("KPI and spend columns must contain only finite numeric values")
-    if (df[numeric_columns] < 0).any().any():
-        raise ValueError("KPI and spend columns cannot contain negative values")
-    zero_spend_channels = [
-        ch for ch, column in spend_cols_by_channel.items() if df[column].sum() <= 0
+    input_data = build_meridian_input(dataset)
+    si_channels = [
+        channel.name
+        for channel in config.media_channels
+        if not (channel.reach_column and channel.frequency_column)
     ]
-    if zero_spend_channels:
-        raise ValueError(f"Channels with zero total spend: {', '.join(zero_spend_channels)}")
+    rf_channels = [
+        channel.name
+        for channel in config.media_channels
+        if channel.reach_column and channel.frequency_column
+    ]
+    channels = si_channels + rf_channels
+    spend_cols_by_channel = {
+        channel.name: channel.spend_column for channel in config.media_channels
+    }
+    estimated_impression_channels = [
+        channel.name
+        for channel in config.media_channels
+        if channel.name in si_channels and not channel.impressions_column
+    ]
+    organic_channels = [channel.name for channel in config.organic_channels]
+    treatment_cols = list(config.treatment_columns)
+    treatment_names = [column.rsplit("_treatment", 1)[0] for column in treatment_cols]
+    kpi_type = config.kpi_type
+    revenue_per_kpi_col = config.revenue_per_kpi_column
+    if kpi_type == "non_revenue" and revenue_per_kpi_col is None and config.revenue_column:
+        revenue_per_kpi_col = "_revenue_per_kpi"
 
-    # Detect organic media columns (suffix: _organic)
-    organic_cols = list(detected.organic_columns)
-    organic_channels = [col.rsplit("_organic", 1)[0] for col in organic_cols]
+    print(f"Loaded data: {len(df)} rows, {dataset.n_geos} geos, {dataset.n_time_periods} periods")
+    print(f"Paid media channels: {channels} ({len(si_channels)} spend+imp, {len(rf_channels)} R&F)")
     if organic_channels:
         print(f"Organic media: {organic_channels}")
-
-    # Detect non-media treatment columns (suffix: _treatment)
-    treatment_cols = list(detected.treatment_columns)
-    treatment_names = [col.rsplit("_treatment", 1)[0] for col in treatment_cols]
     if treatment_names:
         print(f"Non-media treatments: {treatment_names}")
-
-    # Detect control columns (suffix: _control, or common names like is_holiday)
-    control_cols = list(detected.control_columns)
-
-    if "population" not in df.columns:
-        if not allow_population_estimates:
-            raise ValueError(
-                "A population column is required. Pass --allow-population-estimates "
-                "only when the coarse built-in fallback is acceptable."
-            )
-        pop_map = {"US": 330_000_000, "UK": 67_000_000, "AU": 26_000_000}
-        df["population"] = df["geo"].map(lambda x: pop_map.get(x, 10_000_000))
-
-    auxiliary_columns = list(
-        dict.fromkeys(
-            [
-                *si_impression_cols,
-                *rf_reach_cols,
-                *rf_frequency_cols,
-                *organic_cols,
-                *treatment_cols,
-                *control_cols,
-                "population",
-                *[
-                    column
-                    for column in ("revenue", "revenue_per_kpi", "revenue_per_conversion")
-                    if column in df.columns
-                ],
-            ]
-        )
-    )
-    if df[auxiliary_columns].isna().any().any():
-        raise ValueError("Additional model inputs cannot contain missing values")
-    try:
-        auxiliary_values = df[auxiliary_columns].to_numpy(dtype=float)
-    except (TypeError, ValueError) as e:
-        raise ValueError("Additional model inputs must be numeric") from e
-    if not np.isfinite(auxiliary_values).all():
-        raise ValueError("Additional model inputs must contain only finite values")
-    nonnegative_columns = [
-        *si_impression_cols,
-        *rf_reach_cols,
-        *rf_frequency_cols,
-        *organic_cols,
-        "population",
-        *[
-            column
-            for column in ("revenue", "revenue_per_kpi", "revenue_per_conversion")
-            if column in df.columns
-        ],
-    ]
-    if (df[list(dict.fromkeys(nonnegative_columns))] < 0).any().any():
-        raise ValueError("Media, population, organic, and revenue inputs cannot be negative")
-
-    print(f"Paid media channels: {channels} ({len(si_channels)} spend+imp, {len(rf_channels)} R&F)")
-
-    # ─── Build Meridian InputData ───
-    from meridian.data import data_frame_input_data_builder
-
-    kpi_type = "revenue" if kpi_column.lower() == "revenue" else "non_revenue"
-    revenue_per_kpi_col = next(
-        (
-            column
-            for column in ("revenue_per_kpi", "revenue_per_conversion")
-            if column in df.columns
-        ),
-        None,
-    )
-    if kpi_type == "non_revenue" and revenue_per_kpi_col is None and "revenue" in df.columns:
-        invalid_revenue_rows = (df[kpi_column] == 0) & (df["revenue"] != 0)
-        if invalid_revenue_rows.any():
-            raise ValueError("Revenue cannot be non-zero when KPI is zero")
-        revenue_per_kpi_col = "_revenue_per_kpi"
-        df[revenue_per_kpi_col] = (
-            df["revenue"].div(df[kpi_column].where(df[kpi_column] != 0)).fillna(0)
-        )
-
-    builder = data_frame_input_data_builder.DataFrameInputDataBuilder(
-        kpi_type=kpi_type,
-        default_kpi_column=kpi_column,
-    )
-    builder = builder.with_kpi(df)
-    builder = builder.with_population(df)
-
-    if revenue_per_kpi_col:
-        builder = builder.with_revenue_per_kpi(df, revenue_per_kpi_col=revenue_per_kpi_col)
-
-    # Add spend+impressions media channels
-    if si_channels:
-        builder = builder.with_media(
-            df,
-            media_channels=si_channels,
-            media_cols=si_impression_cols,
-            media_spend_cols=si_spend_cols,
-        )
-
-    # Add reach+frequency media channels (Meridian 1.4.x: with_reach, not with_media_rf)
-    if rf_channels:
-        builder = builder.with_reach(
-            df,
-            reach_cols=rf_reach_cols,
-            frequency_cols=rf_frequency_cols,
-            rf_spend_cols=rf_spend_cols,
-            rf_channels=rf_channels,
-        )
-        print(f"Added R&F channels: {rf_channels}")
-
-    # Add organic media channels
-    if organic_cols:
-        builder = builder.with_organic_media(
-            df,
-            organic_media_cols=organic_cols,
-            organic_media_channels=organic_channels,
-        )
-        print(f"Added organic channels: {organic_channels}")
-
-    # Add non-media treatment variables
-    if treatment_cols:
-        builder = builder.with_non_media_treatments(df, non_media_treatment_cols=treatment_cols)
-        print(f"Added treatments: {treatment_names}")
-
-    # Add controls
-    if control_cols:
-        builder = builder.with_controls(df, control_cols=control_cols)
-        print(f"Added controls: {control_cols}")
-
-    input_data = builder.build()
     print("InputData built successfully")
 
     # Configure model

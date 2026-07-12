@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from mmm.preflight import preflight_data_path, validate_paid_run_request
+from mmm.preflight import preflight_data_path, preflight_dataframe, validate_paid_run_request
 
 EXAMPLES = Path(__file__).parent.parent / "data" / "examples"
 
@@ -14,6 +14,19 @@ def test_preflight_accepts_complete_meridian_sample():
 
     assert dataset.n_time_periods == 156
     assert dataset.n_geos == 40
+
+
+def test_in_memory_preflight_matches_path_preflight():
+    import pandas as pd
+
+    path = EXAMPLES / "meridian_sample.csv"
+
+    from_frame = preflight_dataframe(pd.read_csv(path))
+    from_path = preflight_data_path(path)
+
+    assert from_frame.config == from_path.config
+    assert from_frame.n_geos == from_path.n_geos
+    assert from_frame.n_time_periods == from_path.n_time_periods
 
 
 def test_preflight_rejects_short_data_before_remote_submission():

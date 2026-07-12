@@ -41,6 +41,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 | Extended Meridian shapes | Meridian 1.6.2 changed paid-contribution defaults, non-paid interval coordinates, treatment channel names, and configured Altair chart composition | Paid and non-paid extraction is explicit and quantified, treatment provenance is preserved, configured chart mappings compose safely, and a live R&F/organic/treatment/control run verifies the contracts |
 | Direct paid submission | `modal run` performed several readiness checks only after invoking the remote function, so an obviously invalid dataset could start billable GPU compute | Direct runs now execute the shared full local preflight first; a live expected-failure check rejects the 8-week fixture without remote submission |
 | Paid-run options | Explicit population/impression fallback flags were ignored by local preflight, while invalid holdouts were silently skipped only after GPU submission | Preflight now preserves authorized fallback flags and validates holdout bounds before invoking Modal; the GPU path shares the same strict holdout-mask implementation |
+| Modal input construction | The GPU runtime duplicated local column detection, validation, fallback, revenue, control, and Meridian builder logic across roughly 240 lines | File and in-memory inputs now share one loader, preflight contract, and package-level `InputData` builder; Modal is only the compute adapter for this stage |
 
 ## Remaining risks and opportunities
 
@@ -48,7 +49,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 1. **Keep Meridian compatibility tested.** The GPU image and package constraints now target Meridian 1.6.2. Every dependency bump should be followed by a real T4 smoke run and result-schema comparison because analyzer, visualizer, optimizer, and diagnostics objects are version-sensitive. See the [official Meridian changelog](https://github.com/google/meridian/blob/main/CHANGELOG.md).
 
-2. **Finish extracting the Modal implementation into package modules.** The divergent legacy runner is retired and release-sensitive tensor, diagnostics, review, chart, and optimizer adapters are shared. Input construction and several optional result sections still live in `modal_mmm_full.py`; move them into testable package modules until Modal is only a compute adapter.
+2. **Finish extracting the Modal implementation into package modules.** The divergent legacy runner is retired; input construction and release-sensitive tensor, diagnostics, review, chart, and optimizer adapters are shared. Several optional result sections still live in `modal_mmm_full.py`; move them into testable package modules until Modal is only a compute adapter.
 
 3. **Keep the paid GPU boundary deliberate.** Manual T4 smoke tests verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. The `Paid Modal compatibility smoke` workflow now provides an explicit confirmation gate, reduced sampling, a 20-minute job timeout, artifact-contract verification, and seven-day artifact retention. It remains outside ordinary pull requests to avoid surprise spend; repository secrets `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` are required.
 
@@ -61,7 +62,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 ## Verification performed
 
-- `uv run --frozen pytest -q`: 126 passed
+- `uv run --frozen pytest -q`: 133 passed
 - `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 82% total coverage
 - `uv run --frozen ruff check .` and `ruff format --check .`: passed repository-wide
 - `uv run --frozen mypy mmm`: strict typing passed for all 30 source files
@@ -81,7 +82,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 ## Recommended build sequence
 
-1. Move the remaining Modal input/result logic into package modules with isolated contract tests.
+1. Move the remaining Modal result logic into package modules with isolated contract tests.
 2. Add manually dispatched paid fixtures for the remaining model shapes.
 3. Continue CLI and recommendation-engine coverage cleanup.
 4. Build the next product layer only after decision-readiness gates hold across real customer-shaped data.
