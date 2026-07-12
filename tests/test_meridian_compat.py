@@ -1,15 +1,20 @@
 """Tests for release-sensitive Meridian result adapters."""
 
 from enum import Enum, auto
+from pathlib import Path
 from types import SimpleNamespace
 
+import altair as alt
 import pandas as pd
+import xarray as xr
 
 from mmm.meridian_compat import (
     extract_channel_contributions,
+    extract_non_paid_contributions,
     extract_optimization_result,
     extract_predictive_accuracy,
     extract_rhat_diagnostics,
+    save_chart,
     serialize_model_review,
     summarize_channel_tensor,
 )
@@ -33,6 +38,43 @@ def test_aggregates_channel_contributions():
     assert contributions["meta"]["absolute"] == 2.0
     assert contributions["search"]["absolute"] == 8.0
     assert contributions["meta"]["percentage"] == 20.0
+
+
+def test_extracts_non_paid_channel_contributions():
+    dataset = xr.Dataset(
+        {
+            "incremental_outcome": (
+                ("channel", "metric", "distribution"),
+                [
+                    [[10.0, 12.0], [9.0, 11.0], [5.0, 6.0], [15.0, 18.0]],
+                    [[20.0, 25.0], [18.0, 22.0], [10.0, 12.0], [30.0, 35.0]],
+                ],
+            ),
+            "pct_of_contribution": (
+                ("channel", "metric", "distribution"),
+                [
+                    [[4.0, 5.0], [4.0, 5.0], [2.0, 3.0], [7.0, 8.0]],
+                    [[8.0, 10.0], [8.0, 9.0], [4.0, 5.0], [12.0, 14.0]],
+                ],
+            ),
+        },
+        coords={
+            "channel": ["newsletter", "promotion"],
+            "metric": ["mean", "median", "ci_lo", "ci_hi"],
+            "distribution": ["prior", "posterior"],
+        },
+    )
+
+    contributions = extract_non_paid_contributions(dataset, ["newsletter", "missing"])
+
+    assert contributions == {
+        "newsletter": {
+            "absolute": 12.0,
+            "percentage": 5.0,
+            "ci_lower": 6.0,
+            "ci_upper": 18.0,
+        }
+    }
 
 
 def test_extracts_predictive_accuracy_metrics():
@@ -104,6 +146,32 @@ def test_extracts_optimizer_dataset():
 
     assert allocation == {"meta": 80.0, "google": 120.0}
     assert outcome == 450.0
+
+
+def test_save_chart_combines_configured_chart_mapping(tmp_path, monkeypatch):
+    data = {"values": [{"x": 1, "y": 2}]}
+    charts = {
+        "points": alt.Chart(data)
+        .mark_point()
+        .encode(x="x:Q", y="y:Q")
+        .configure_axis(labelColor="red"),
+        "line": alt.Chart(data)
+        .mark_line()
+        .encode(x="x:Q", y="y:Q")
+        .configure_axis(labelColor="blue"),
+    }
+    output = tmp_path / "chart.png"
+
+    def fake_save(chart, filename, *, scale_factor):
+        assert len(chart.to_dict()["vconcat"]) == 2
+        assert scale_factor == 1.5
+        Path(filename).write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    monkeypatch.setattr(alt.VConcatChart, "save", fake_save)
+
+    save_chart(charts, output)
+
+    assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
 class _FakeDataset:

@@ -6,7 +6,7 @@ Audit date: 2026-07-11
 
 Sommmelier has a compelling product shape: local data checks, GPU fitting, model diagnostics, reporting, recommendations, calibration, and longitudinal quality tracking are all present. The project is still alpha-quality, however. Before this audit, several paths could produce confident-looking but incorrect output: an asynchronous weekly run could select an old result, non-monetary KPI efficiency could be described as profit, malformed panel data could reach paid GPU fitting, and calibration parameters mixed linear and log scales.
 
-This work fixes those highest-risk issues and raises measured line coverage from 8% to 74%. The project is substantially safer to experiment with, but still needs more real-data coverage before it should be treated as an unattended production decision system.
+This work fixes those highest-risk issues and raises measured line coverage from 8% to 82%. The project is substantially safer to experiment with, but still needs more real-data coverage before it should be treated as an unattended production decision system.
 
 ## What was fixed
 
@@ -37,6 +37,8 @@ This work fixes those highest-risk issues and raises measured line coverage from
 | Historical comparisons | Analysis assumed the current result occupied a specific position in `outputs/`, so external or future-dated files could select the wrong baseline; contribution deltas were never populated | Prior-run selection now excludes the current run by path and ID, respects timestamps, and reports contribution percentage-point changes |
 | Time-varying controls | Controls were retained only when they varied across geographies at the same time, dropping valid national and time-varying controls | Any non-constant configured control is now passed to Meridian; constant controls remain excluded |
 | Agent tooling | A 210-line Claude-only instruction file and 731 lines of obsolete slash commands duplicated workflows | `.agents` is canonical, four intent-triggered skills replace slash commands, and root/Claude/Codex entry points are relative symlinks to the same files |
+| CLI output contract | `--json` mixed a human preamble into machine output, malformed result files surfaced raw exceptions, and a zero optimization budget silently became the current budget | JSON mode is parseable, file errors are concise, non-positive budgets are rejected before model loading, file URIs are safe, and the CLI is exercised end-to-end |
+| Extended Meridian shapes | Meridian 1.6.2 changed paid-contribution defaults, non-paid interval coordinates, treatment channel names, and configured Altair chart composition | Paid and non-paid extraction is explicit and quantified, treatment provenance is preserved, configured chart mappings compose safely, and a live R&F/organic/treatment/control run verifies the contracts |
 
 ## Remaining risks and opportunities
 
@@ -48,19 +50,19 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 3. **Keep the paid GPU boundary deliberate.** Manual T4 smoke tests verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. The `Paid Modal compatibility smoke` workflow now provides an explicit confirmation gate, reduced sampling, a 20-minute job timeout, artifact-contract verification, and seven-day artifact retention. It remains outside ordinary pull requests to avoid surprise spend; repository secrets `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` are required.
 
-4. **Exercise more live model shapes.** The current paid smoke covers the geo-level spend-and-impressions sample. Add budget-capped R&F, organic, treatment, holdout, calibration, national-model, and expected-failure fixtures so those branches cannot drift silently.
+4. **Exercise the remaining live model shapes.** Paid smoke runs now cover geo-level spend-and-impressions plus a combined R&F, organic, treatment, and controls fixture. The manual workflow can generate extended and national fixtures. Add paid holdout, calibration, national-model, and expected-failure runs so those branches cannot drift silently.
 
 ### P2 — next hardening pass
 
-1. Raise coverage around CLI commands and the improvement advisor. Overall coverage is now 74%; the recommendation engine is at 91%, model builder 92%, local reports 75%, insights 80%, tracking 65%, improvement advisor 60%, and CLI 27%.
+1. Raise coverage around the improvement advisor, tracking, and model wrapper. Overall coverage is now 82%; the recommendation engine is at 95%, CLI 94%, model builder 92%, visualization 82%, local reports 75%, insights 80%, tracking 65%, improvement advisor 65%, and model wrapper 68%.
 2. Add model-bundle compatibility tests against a small genuinely fitted Meridian artifact, not only the isolated serializer contract.
 
 ## Verification performed
 
-- `uv run --frozen pytest -q`: 103 passed
-- `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 74% total coverage
+- `uv run --frozen pytest -q`: 124 passed
+- `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 82% total coverage
 - `uv run --frozen ruff check .` and `ruff format --check .`: passed repository-wide
-- `uv run --frozen mypy mmm`: strict typing passed for all 28 source files
+- `uv run --frozen mypy mmm`: strict typing passed for all 29 source files
 - `python3 -m compileall`: passed
 - `git diff --check`: passed
 - CLI failure contract tested through Typer's runner
@@ -69,6 +71,8 @@ This work fixes those highest-risk issues and raises measured line coverage from
 - Calibration mismatch preflight: rejected incompatible units before the remote GPU function was invoked
 - Structured preflight logs: valid JSON event with the same run ID used by the manifest and remote call
 - Local smoke verifier: required manifest sections, 10 distinct PNGs, optimizer allocation, and HTML report validated against the live artifact
+- Live extended-shape smoke: R&F optimal frequency, quantified organic and treatment effects with intervals, controls, paid contributions, 10 charts, and 3 optimizer scenarios; technical status `complete` with zero extraction errors
+- CLI contracts: valid pure-JSON output, concise malformed-file errors, local model orchestration, report generation, quality history, optimizer rendering, and insight rendering covered through Typer
 - Agent layout: all four instruction/skills symlinks resolve, legacy `.claude/commands` is absent, and every skill has valid discovery metadata
 - Locked dependency graph generated with uv; CI covers Python 3.11 and 3.12, tests, Ruff lint/format, strict mypy, package build, and CLI startup
 
