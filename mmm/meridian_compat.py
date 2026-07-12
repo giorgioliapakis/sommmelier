@@ -114,6 +114,156 @@ def extract_predictive_accuracy(dataset: Any) -> dict[str, float]:
     return metrics
 
 
+def extract_holdout_accuracy(dataset: Any, holdout_weeks: int) -> dict[str, Any]:
+    """Extract out-of-sample metrics without averaging Train, Test, and All Data."""
+    import numpy as np
+
+    required_coords = {"metric", "evaluation_set"}
+    if (
+        dataset is None
+        or not required_coords.issubset(dataset.coords)
+        or "value" not in dataset.data_vars
+    ):
+        raise ValueError("Predictive accuracy omitted holdout evaluation coordinates")
+
+    evaluation_sets = [str(value) for value in dataset.coords["evaluation_set"].values]
+    test_set = next((value for value in evaluation_sets if value.lower() == "test"), None)
+    if test_set is None:
+        raise ValueError("Predictive accuracy omitted the Test evaluation set")
+
+    granularities = (
+        [str(value) for value in dataset.coords["geo_granularity"].values]
+        if "geo_granularity" in dataset.coords
+        else [None]
+    )
+    aliases = {"rsquared": "r_squared", "mape": "mape", "wmape": "wmape"}
+    metrics: dict[str, dict[str, float]] = {}
+    for granularity in granularities:
+        output_name = granularity.lower().replace(" ", "_") if granularity else "all"
+        output_metrics: dict[str, float] = {}
+        for raw_metric in dataset.coords["metric"].values:
+            metric_name = aliases.get(str(raw_metric).lower().replace("_", ""))
+            if metric_name is None:
+                continue
+            selectors = {"evaluation_set": test_set, "metric": raw_metric}
+            if granularity is not None:
+                selectors["geo_granularity"] = granularity
+            values = np.asarray(dataset["value"].sel(selectors).values, dtype=float)
+            output_metrics[metric_name] = float(values.mean())
+        metrics[output_name] = output_metrics
+
+    return {
+        "holdout_weeks": holdout_weeks,
+        "evaluation_set": test_set,
+        "metrics": metrics,
+    }
+
+
+def extract_response_curves(
+    dataset: Any,
+    channels: list[str],
+    spend_multipliers: list[float] | None = None,
+) -> dict[str, dict[str, list[float]]]:
+    """Normalize Meridian response curves and select the named mean metric."""
+    import numpy as np
+
+    if (
+        dataset is None
+        or "channel" not in dataset.coords
+        or "incremental_outcome" not in dataset.data_vars
+    ):
+        return {}
+
+    available_channels = {str(channel) for channel in dataset.coords["channel"].values}
+    multipliers = (
+        np.asarray(dataset.coords["spend_multiplier"].values, dtype=float).tolist()
+        if "spend_multiplier" in dataset.coords
+        else list(spend_multipliers or [])
+    )
+    curves: dict[str, dict[str, list[float]]] = {}
+    for channel in channels:
+        if channel not in available_channels:
+            continue
+        values = dataset["incremental_outcome"].sel(channel=channel)
+        values = _select_mean_metric(values)
+        response = np.asarray(values.values, dtype=float).reshape(-1).tolist()
+        if multipliers and len(response) != len(multipliers):
+            raise ValueError(
+                f"Response curve for '{channel}' has {len(response)} values for "
+                f"{len(multipliers)} spend multipliers"
+            )
+        curves[channel] = {
+            "spend_multiplier": [float(value) for value in multipliers],
+            "response": [float(value) for value in response],
+        }
+    return curves
+
+
+def extract_adstock_decay(data: Any, channels: list[str]) -> dict[str, dict[str, float]]:
+    """Extract one-period retention or a stable mean from adstock summary rows."""
+    if data is None or not hasattr(data, "columns") or "mean" not in data.columns:
+        return {}
+
+    decay: dict[str, dict[str, float]] = {}
+    for channel in channels:
+        channel_data = data[data["channel"] == channel] if "channel" in data.columns else data
+        if len(channel_data) == 0:
+            continue
+        integer_data = channel_data
+        if "is_int_time_unit" in channel_data.columns:
+            integer_data = channel_data[channel_data["is_int_time_unit"].astype(bool)]
+        one_period = (
+            integer_data[integer_data["time_units"] == 1.0]
+            if "time_units" in integer_data.columns
+            else None
+        )
+        if one_period is not None and len(one_period) > 0:
+            decay[channel] = {"retention_at_1_period": float(one_period["mean"].iloc[0])}
+        else:
+            decay[channel] = {"mean_decay": float(channel_data["mean"].mean())}
+    return decay
+
+
+def extract_optimal_frequency(result: Any, channels: list[str]) -> dict[str, float]:
+    """Normalize tensor and xarray optimal-frequency results by channel."""
+    import numpy as np
+
+    if result is None:
+        return {}
+    if hasattr(result, "data_vars"):
+        if "optimal_frequency" not in result.data_vars:
+            return {}
+        channel_coord = "rf_channel" if "rf_channel" in result.coords else "channel"
+        if channel_coord not in result.coords:
+            return {}
+        available_channels = {str(channel) for channel in result.coords[channel_coord].values}
+        frequencies = {}
+        for channel in channels:
+            if channel not in available_channels:
+                continue
+            values = result["optimal_frequency"].sel({channel_coord: channel})
+            values = _select_mean_metric(values)
+            frequencies[channel] = float(np.asarray(values.values, dtype=float).mean())
+        return frequencies
+
+    values = np.asarray(result.numpy() if hasattr(result, "numpy") else result, dtype=float)
+    if values.ndim == 0 or values.shape[-1] != len(channels):
+        raise ValueError(
+            "Expected optimal frequency ending in one value per R&F channel; "
+            f"got shape {values.shape} for {len(channels)} channels"
+        )
+    means = values.mean(axis=tuple(range(values.ndim - 1)))
+    return {channel: float(means[index]) for index, channel in enumerate(channels)}
+
+
+def _select_mean_metric(values: Any) -> Any:
+    if "metric" not in values.dims:
+        return values
+    metrics = [str(metric) for metric in values.coords["metric"].values]
+    mean_metric = next((metric for metric in metrics if metric.lower() == "mean"), metrics[0])
+    return values.sel(metric=mean_metric)
+
+
 def extract_rhat_diagnostics(rhat_summary: Any, threshold: float = 1.1) -> dict[str, Any]:
     """Normalize Meridian's R-hat summary without assuming one release's columns."""
     if rhat_summary is None or len(rhat_summary) == 0:
