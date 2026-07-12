@@ -67,6 +67,7 @@ def fit_mmm_full(
     from mmm.detection import detect_columns
     from mmm.meridian_compat import (
         extract_channel_contributions,
+        extract_non_paid_contributions,
         extract_optimization_result,
         extract_predictive_accuracy,
         extract_rhat_diagnostics,
@@ -560,7 +561,11 @@ def fit_mmm_full(
     print("Extracting contributions...")
     try:
         results["contributions"] = extract_channel_contributions(
-            mmm_analyzer.incremental_outcome(use_posterior=True), channels
+            mmm_analyzer.incremental_outcome(
+                use_posterior=True,
+                include_non_paid_channels=False,
+            ),
+            channels,
         )
     except Exception as e:
         print(f"Warning: Contribution extraction failed: {e}")
@@ -688,62 +693,57 @@ def fit_mmm_full(
             print(f"Warning: Optimal frequency extraction failed: {e}")
             record_section_error(results, "optimal_frequency", e)
 
-    # 5c. Organic media contributions
-    # Organic channels are not in summary_metrics (which only covers paid media).
-    # Instead, extract from the model's expected_outcome or incremental_outcome
-    # by looking at the organic media channel dimension.
-    if organic_channels:
-        print("Extracting organic media contributions...")
+    # 5c/5d. Organic and treatment contributions. Meridian exposes these through
+    # summary_metrics(include_non_paid_channels=True), where spend-dependent
+    # metrics are intentionally absent but incremental outcome is quantified.
+    if organic_channels or treatment_names:
+        print("Extracting non-paid channel contributions...")
         try:
-            # Check if the model has organic media data
-            organic_media_ch = getattr(input_data, "organic_media_channel", None)
-            if organic_media_ch is not None:
-                print(
-                    f"  Model organic channels: {organic_media_ch.values if hasattr(organic_media_ch, 'values') else organic_media_ch}"
-                )
-            # Use expected_vs_actual_data which includes all components
-            ev = mmm_analyzer.expected_vs_actual_data()
-            if ev is not None:
-                print(f"  expected_vs_actual: vars={list(ev.data_vars)}, dims={dict(ev.dims)}")
-                # Organic contributions show up in the decomposition
-                for ch in organic_channels:
-                    results["organic_contributions"][ch] = {
-                        "included_in_model": True,
-                    }
-            if not results["organic_contributions"]:
-                # Mark as included even without quantified contribution
-                for ch in organic_channels:
-                    results["organic_contributions"][ch] = {"included_in_model": True}
+            non_paid_summary = mmm_analyzer.summary_metrics(
+                include_non_paid_channels=True,
+                use_kpi=True,
+            )
         except Exception as e:
-            print(f"Warning: Organic contribution extraction failed: {e}")
-            record_section_error(results, "organic_contributions", e)
-            for ch in organic_channels:
-                results["organic_contributions"][ch] = {"included_in_model": True}
+            print(f"Warning: Non-paid summary generation failed: {e}")
+            if organic_channels:
+                record_section_error(results, "organic_contributions", e)
+            if treatment_names:
+                record_section_error(results, "treatment_effects", e)
+        else:
+            if organic_channels:
+                try:
+                    results["organic_contributions"] = extract_non_paid_contributions(
+                        non_paid_summary, organic_channels
+                    )
+                    missing = set(organic_channels).difference(results["organic_contributions"])
+                    if missing:
+                        raise ValueError(
+                            "Meridian non-paid summary omitted organic channels: "
+                            + ", ".join(sorted(missing))
+                        )
+                except Exception as e:
+                    print(f"Warning: Organic contribution extraction failed: {e}")
+                    record_section_error(results, "organic_contributions", e)
 
-    # 5d. Non-media treatment effects (from baseline_summary_metrics)
-    if treatment_cols:
-        print("Extracting treatment effects...")
-        try:
-            # Treatment effects show up in baseline_summary_metrics
-            bs = mmm_analyzer.baseline_summary_metrics()
-            if bs is not None:
-                for i, tname in enumerate(treatment_names):
-                    results["treatment_effects"][tname] = {
-                        "name": tname,
-                        "column": treatment_cols[i],
-                        "included_in_model": True,
+            if treatment_names:
+                try:
+                    treatment_contributions = extract_non_paid_contributions(
+                        non_paid_summary, treatment_cols
+                    )
+                    results["treatment_effects"] = {
+                        name: {"column": column, **treatment_contributions[column]}
+                        for name, column in zip(treatment_names, treatment_cols)
+                        if column in treatment_contributions
                     }
-                    # Try to get the treatment effect from the baseline
-                    if "baseline_outcome" in bs.data_vars:
-                        mean_val = bs["baseline_outcome"].sel(
-                            metric="mean", distribution="posterior"
+                    missing = set(treatment_names).difference(results["treatment_effects"])
+                    if missing:
+                        raise ValueError(
+                            "Meridian non-paid summary omitted treatment channels: "
+                            + ", ".join(sorted(missing))
                         )
-                        results["treatment_effects"][tname]["baseline_impact"] = float(
-                            mean_val.values
-                        )
-        except Exception as e:
-            print(f"Warning: Treatment effects extraction failed: {e}")
-            record_section_error(results, "treatment_effects", e)
+                except Exception as e:
+                    print(f"Warning: Treatment contribution extraction failed: {e}")
+                    record_section_error(results, "treatment_effects", e)
 
     # 6. Model fit (R-squared, MAPE) - critical for model quality tracking
     print("Extracting model fit metrics...")

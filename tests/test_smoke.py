@@ -58,6 +58,13 @@ def test_verify_modal_smoke_rejects_duplicate_charts(tmp_path):
         verify_modal_smoke(result)
 
 
+def test_verify_modal_smoke_can_require_model_shape_sections(tmp_path):
+    result = _write_smoke_result(tmp_path)
+
+    with pytest.raises(ValueError, match="optimal_frequency"):
+        verify_modal_smoke(result, required_sections=("optimal_frequency",))
+
+
 def test_latest_result_requires_an_artifact(tmp_path):
     with pytest.raises(ValueError, match="No full_results"):
         latest_result(tmp_path)

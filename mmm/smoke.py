@@ -28,7 +28,9 @@ def latest_result(outputs_dir: Path) -> Path:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def verify_modal_smoke(result_path: Path) -> dict[str, Any]:
+def verify_modal_smoke(
+    result_path: Path, *, required_sections: tuple[str, ...] = ()
+) -> dict[str, Any]:
     """Assert that a smoke run exercised the release-sensitive output contracts."""
     with result_path.open() as handle:
         results = json.load(handle)
@@ -47,6 +49,15 @@ def verify_modal_smoke(result_path: Path) -> dict[str, Any]:
     ]
     if incomplete:
         raise ValueError(f"Required result sections are incomplete: {', '.join(incomplete)}")
+    incomplete_optional = [
+        section
+        for section in required_sections
+        if manifest.get("sections", {}).get(section) != "complete"
+    ]
+    if incomplete_optional:
+        raise ValueError(
+            "Requested compatibility sections are incomplete: " + ", ".join(incomplete_optional)
+        )
     if manifest.get("errors"):
         raise ValueError(f"Result extraction recorded errors: {manifest['errors']}")
 
@@ -82,9 +93,10 @@ def main() -> None:
     """Validate the newest smoke artifact and print a compact summary."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("outputs_dir", nargs="?", type=Path, default=Path("outputs"))
+    parser.add_argument("--require-section", action="append", default=[])
     args = parser.parse_args()
     result_path = latest_result(args.outputs_dir)
-    results = verify_modal_smoke(result_path)
+    results = verify_modal_smoke(result_path, required_sections=tuple(args.require_section))
     manifest = results["run_manifest"]
     print(
         f"Verified {result_path}: run={manifest['status']}, "

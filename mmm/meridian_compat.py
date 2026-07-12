@@ -54,6 +54,43 @@ def extract_channel_contributions(tensor: Any, channels: list[str]) -> dict[str,
     }
 
 
+def extract_non_paid_contributions(
+    dataset: Any, channels: list[str]
+) -> dict[str, dict[str, float]]:
+    """Extract organic and treatment effects from Meridian summary metrics."""
+    import numpy as np
+
+    required_variables = {"incremental_outcome", "pct_of_contribution"}
+    if (
+        dataset is None
+        or "channel" not in dataset.coords
+        or not required_variables.issubset(dataset.data_vars)
+    ):
+        return {}
+
+    available_channels = {str(channel) for channel in dataset.coords["channel"].values}
+    contributions = {}
+    for channel in channels:
+        if channel not in available_channels:
+            continue
+
+        def metric(variable: str, name: str) -> float:
+            selected = dataset[variable].sel(
+                channel=channel,
+                distribution="posterior",
+                metric=name,
+            )
+            return float(np.asarray(selected.values, dtype=float).mean())
+
+        contributions[channel] = {
+            "absolute": metric("incremental_outcome", "mean"),
+            "percentage": metric("pct_of_contribution", "mean"),
+            "ci_lower": metric("incremental_outcome", "ci_lo"),
+            "ci_upper": metric("incremental_outcome", "ci_hi"),
+        }
+    return contributions
+
+
 def extract_predictive_accuracy(dataset: Any) -> dict[str, float]:
     """Normalize Meridian's predictive-accuracy xarray dataset."""
     import numpy as np
@@ -168,7 +205,13 @@ def save_chart(chart: Any, output_path: str | Path) -> None:
         else:
             import altair as alt
 
-            chart = alt.vconcat(*charts)
+            config_free_charts = []
+            for child in charts:
+                if hasattr(child, "config") and hasattr(child, "copy"):
+                    child = child.copy(deep=True)
+                    child.config = alt.Undefined
+                config_free_charts.append(child)
+            chart = alt.vconcat(*config_free_charts)
 
     if hasattr(chart, "save"):
         chart.save(str(output_path), scale_factor=1.5)

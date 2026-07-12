@@ -8,6 +8,15 @@ on:
         required: true
         default: false
         type: boolean
+      model_shape:
+        description: Meridian input shape to exercise
+        required: true
+        default: standard
+        type: choice
+        options:
+          - standard
+          - extended
+          - national
 
 permissions:
   contents: read
@@ -35,17 +44,40 @@ jobs:
       - run: uv sync --frozen
       - name: Verify Modal credentials are configured
         run: uv run --frozen modal token info
+      - name: Prepare selected model shape
+        env:
+          MODEL_SHAPE: ${{ inputs.model_shape }}
+        run: |
+          if [ "$MODEL_SHAPE" = "standard" ]; then
+            echo "MMM_DATA=data/examples/meridian_sample.csv" >> "$GITHUB_ENV"
+          elif [ "$MODEL_SHAPE" = "national" ]; then
+            uv run --frozen python -m mmm.sample_fixture data/examples/meridian_sample.csv /tmp/model-shape.csv --national
+            echo "MMM_DATA=/tmp/model-shape.csv" >> "$GITHUB_ENV"
+          else
+            uv run --frozen python -m mmm.sample_fixture data/examples/meridian_sample.csv /tmp/model-shape.csv
+            echo "MMM_DATA=/tmp/model-shape.csv" >> "$GITHUB_ENV"
+          fi
       - name: Run reduced-sampling T4 compatibility fit
         run: >-
           uv run --frozen modal run modal_mmm_full.py
-          --data data/examples/meridian_sample.csv
+          --data "$MMM_DATA"
           --n-chains 2
           --n-keep 100
           --n-adapt 200
           --n-burnin 100
           --report
       - name: Verify result, charts, optimizer, and report contracts
-        run: uv run --frozen python -m mmm.smoke outputs
+        env:
+          MODEL_SHAPE: ${{ inputs.model_shape }}
+        run: |
+          if [ "$MODEL_SHAPE" = "standard" ]; then
+            uv run --frozen python -m mmm.smoke outputs
+          else
+            uv run --frozen python -m mmm.smoke outputs \
+              --require-section optimal_frequency \
+              --require-section organic_contributions \
+              --require-section treatment_effects
+          fi
       - name: Upload smoke artifacts
         if: always()
         uses: actions/upload-artifact@v6

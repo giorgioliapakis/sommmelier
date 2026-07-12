@@ -16,6 +16,19 @@ app = typer.Typer(
 console = Console()
 
 
+def load_json_object(path: Path) -> dict[str, object]:
+    """Load a CLI JSON input with a concise, user-facing error contract."""
+    try:
+        data = json.loads(path.read_text())
+    except OSError as exc:
+        raise ValueError(f"Could not read {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {path}: {exc.msg} at line {exc.lineno}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a JSON object in {path}")
+    return data
+
+
 def find_latest_results(outputs_dir: Path = Path("outputs")) -> Path | None:
     """Find the most recent results file."""
     results_files = list(outputs_dir.glob("full_results_*.json"))
@@ -75,8 +88,8 @@ def run(
     data_path: Annotated[Path, typer.Argument(help="Path to MMM data CSV")],
     output_dir: Annotated[Path, typer.Option(help="Output directory")] = Path("outputs"),
     kpi_column: Annotated[str, typer.Option(help="KPI column name")] = "conversions",
-    n_chains: Annotated[int, typer.Option(help="Number of MCMC chains")] = 4,
-    n_keep: Annotated[int, typer.Option(help="Samples to keep per chain")] = 500,
+    n_chains: Annotated[int, typer.Option(help="Number of MCMC chains", min=1)] = 4,
+    n_keep: Annotated[int, typer.Option(help="Samples to keep per chain", min=1)] = 500,
 ) -> None:
     """Run the MMM model on a dataset (local, no GPU)."""
     from mmm.analysis.reports import generate_report
@@ -146,13 +159,18 @@ def analyze(
 
     from mmm.result_manifest import decision_readiness
 
-    readiness, reason = decision_readiness(json.loads(results_path.read_text()))
+    try:
+        results = load_json_object(results_path)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    readiness, reason = decision_readiness(results)
     if not readiness:
         console.print(f"[red]Recommendations blocked:[/red] {reason}")
         console.print("Generate the HTML report to review diagnostics, then refit the model.")
         raise typer.Exit(2)
 
-    console.print(f"Analyzing: {results_path}")
     report = generate_analysis(results_path)
 
     if output_json:
@@ -174,8 +192,9 @@ def analyze(
             "model_health": report.model_health,
             "week_over_week": report.week_over_week,
         }
-        console.print(json.dumps(output, indent=2))
+        typer.echo(json.dumps(output, indent=2))
     else:
+        console.print(f"Analyzing: {results_path}")
         console.print(format_report_for_claude(report))
 
         analysis_path = results_path.with_name(
@@ -198,8 +217,11 @@ def report(
         raise typer.Exit(1)
 
     console.print(f"Loading results from {results_path}...")
-    with open(results_path) as f:
-        results = json.load(f)
+    try:
+        results = load_json_object(results_path)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     report_path = results_path.with_suffix(".html")
     generate_html_report(results, report_path)
@@ -208,7 +230,7 @@ def report(
     if open_browser:
         import webbrowser
 
-        webbrowser.open(f"file://{report_path.absolute()}")
+        webbrowser.open(report_path.resolve().as_uri())
         console.print("Opened in browser")
 
 
@@ -245,11 +267,15 @@ def optimize(
 
     console.print("\n[bold]Budget Optimization[/bold]\n")
 
+    if budget is not None and budget <= 0:
+        console.print("[red]Error:[/red] Budget must be greater than zero.")
+        raise typer.Exit(1)
+
     with console.status("Loading model..."):
         mmm = AutoMMM.load(model_path)
 
     current_spend = mmm.dataset.total_spend
-    target_budget = budget or current_spend
+    target_budget = current_spend if budget is None else budget
 
     console.print(f"Current total spend: ${current_spend:,.2f}")
     console.print(f"Optimizing for budget: ${target_budget:,.2f}\n")
