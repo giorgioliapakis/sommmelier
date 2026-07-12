@@ -967,6 +967,7 @@ def main(
         load_calibration,
     )
     from mmm.observability import configure_run_logger, log_event, new_run_id
+    from mmm.preflight import preflight_data_path
     from mmm.result_manifest import finalize_run_manifest, record_section_error
 
     data_path = Path(data)
@@ -977,6 +978,15 @@ def main(
     run_logger = configure_run_logger(run_id, "local")
     log_event(run_logger, "input_read_started", data_path=str(data_path))
     print(f"Reading data from {data_path}...")
+    dataset = preflight_data_path(data_path, kpi_column=kpi_column)
+    log_event(
+        run_logger,
+        "input_preflight_completed",
+        n_rows=len(dataset.df),
+        n_geos=dataset.n_geos,
+        n_periods=dataset.n_time_periods,
+        n_channels=len(dataset.media_channels),
+    )
     data_csv = data_path.read_text()
     columns = next(csv.reader(io.StringIO(data_csv)))
     calibration_metric = infer_calibration_metric(columns, kpi_column)

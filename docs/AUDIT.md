@@ -39,6 +39,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 | Agent tooling | A 210-line Claude-only instruction file and 731 lines of obsolete slash commands duplicated workflows | `.agents` is canonical, four intent-triggered skills replace slash commands, and root/Claude/Codex entry points are relative symlinks to the same files |
 | CLI output contract | `--json` mixed a human preamble into machine output, malformed result files surfaced raw exceptions, and a zero optimization budget silently became the current budget | JSON mode is parseable, file errors are concise, non-positive budgets are rejected before model loading, file URIs are safe, and the CLI is exercised end-to-end |
 | Extended Meridian shapes | Meridian 1.6.2 changed paid-contribution defaults, non-paid interval coordinates, treatment channel names, and configured Altair chart composition | Paid and non-paid extraction is explicit and quantified, treatment provenance is preserved, configured chart mappings compose safely, and a live R&F/organic/treatment/control run verifies the contracts |
+| Direct paid submission | `modal run` performed several readiness checks only after invoking the remote function, so an obviously invalid dataset could start billable GPU compute | Direct runs now execute the shared full local preflight first; a live expected-failure check rejects the 8-week fixture without remote submission |
 
 ## Remaining risks and opportunities
 
@@ -50,7 +51,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 3. **Keep the paid GPU boundary deliberate.** Manual T4 smoke tests verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. The `Paid Modal compatibility smoke` workflow now provides an explicit confirmation gate, reduced sampling, a 20-minute job timeout, artifact-contract verification, and seven-day artifact retention. It remains outside ordinary pull requests to avoid surprise spend; repository secrets `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` are required.
 
-4. **Exercise the remaining live model shapes.** Paid smoke runs now cover geo-level spend-and-impressions plus a combined R&F, organic, treatment, and controls fixture. The manual workflow can generate extended and national fixtures. Add paid holdout, calibration, national-model, and expected-failure runs so those branches cannot drift silently.
+4. **Exercise the remaining live model shapes.** Paid smoke runs now cover geo-level spend-and-impressions plus a combined R&F, organic, treatment, and controls fixture. A live expected-failure check confirms rejection before remote submission, and the manual workflow can generate extended and national fixtures. Add paid holdout, calibration, and national-model runs so those branches cannot drift silently.
 
 ### P2 — next hardening pass
 
@@ -59,10 +60,10 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 ## Verification performed
 
-- `uv run --frozen pytest -q`: 124 passed
+- `uv run --frozen pytest -q`: 126 passed
 - `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 82% total coverage
 - `uv run --frozen ruff check .` and `ruff format --check .`: passed repository-wide
-- `uv run --frozen mypy mmm`: strict typing passed for all 29 source files
+- `uv run --frozen mypy mmm`: strict typing passed for all 30 source files
 - `python3 -m compileall`: passed
 - `git diff --check`: passed
 - CLI failure contract tested through Typer's runner
@@ -72,6 +73,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 - Structured preflight logs: valid JSON event with the same run ID used by the manifest and remote call
 - Local smoke verifier: required manifest sections, 10 distinct PNGs, optimizer allocation, and HTML report validated against the live artifact
 - Live extended-shape smoke: R&F optimal frequency, quantified organic and treatment effects with intervals, controls, paid contributions, 10 charts, and 3 optimizer scenarios; technical status `complete` with zero extraction errors
+- Live expected-failure smoke: the short fixture exits locally with `MMM data preflight failed`; no remote-submission or model-start event occurs
 - CLI contracts: valid pure-JSON output, concise malformed-file errors, local model orchestration, report generation, quality history, optimizer rendering, and insight rendering covered through Typer
 - Agent layout: all four instruction/skills symlinks resolve, legacy `.claude/commands` is absent, and every skill has valid discovery metadata
 - Locked dependency graph generated with uv; CI covers Python 3.11 and 3.12, tests, Ruff lint/format, strict mypy, package build, and CLI startup
