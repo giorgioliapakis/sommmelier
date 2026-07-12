@@ -1,6 +1,7 @@
 """Tests for calibration-to-prior numerical correctness."""
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,8 @@ from mmm.calibration.calibration_data import (
     load_calibration,
     save_calibration,
 )
+
+CALIBRATION_FIXTURE = Path(__file__).parent.parent / "data" / "calibration_monetary_example.json"
 
 
 def test_platform_prior_location_is_converted_to_log_space():
@@ -206,3 +209,12 @@ def test_generated_template_cannot_apply_fake_priors(tmp_path):
 
     assert calculate_channel_priors(calibration) == {}
     assert "Add only measured calibration data" in calibration.notes
+
+
+def test_paid_smoke_calibration_fixture_matches_extended_channels():
+    calibration = load_calibration(CALIBRATION_FIXTURE)
+
+    priors = calculate_channel_priors(calibration, expected_metric="monetary_roi")
+
+    assert set(priors) == {"meta", "search"}
+    assert all(prior["metric"] == "monetary_roi" for prior in priors.values())

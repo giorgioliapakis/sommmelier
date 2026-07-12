@@ -55,7 +55,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 3. **Keep the paid GPU boundary deliberate.** Manual T4 smoke tests verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. The `Paid Modal compatibility smoke` workflow now provides an explicit confirmation gate, reduced sampling, a 20-minute job timeout, artifact-contract verification, and seven-day artifact retention. It remains outside ordinary pull requests to avoid surprise spend; repository secrets `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` are required.
 
-4. **Exercise the remaining live model shapes.** Paid smoke runs now cover geo-level spend-and-impressions plus a combined R&F, organic, treatment, and controls fixture. A live expected-failure check confirms rejection before remote submission, and the manual workflow can generate extended and national fixtures. Add paid holdout, calibration, and national-model runs so those branches cannot drift silently.
+4. **Exercise every live model shape after dependency changes.** The manually authorized workflow can run standard, extended, national, balanced-holdout, and monetary-calibration fixtures. Standard and extended shapes have been exercised on Meridian 1.6.2; the new national, holdout, and calibration choices still need their first paid run before those contracts are considered proven.
 
 ### P2 — next hardening pass
 
@@ -64,7 +64,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 ## Verification performed
 
-- `uv run --frozen pytest -q`: 141 passed
+- `uv run --frozen pytest -q`: 142 passed
 - `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 82% total coverage
 - `uv run --frozen ruff check .` and `ruff format --check .`: passed repository-wide
 - `uv run --frozen mypy mmm`: strict typing passed for all 30 source files
@@ -85,6 +85,6 @@ This work fixes those highest-risk issues and raises measured line coverage from
 ## Recommended build sequence
 
 1. Move the remaining Modal result logic into package modules with isolated contract tests.
-2. Add manually dispatched paid fixtures for the remaining model shapes.
+2. Run the manually dispatched national, holdout, and calibration fixtures after explicitly authorizing Modal spend.
 3. Continue CLI and recommendation-engine coverage cleanup.
 4. Build the next product layer only after decision-readiness gates hold across real customer-shaped data.
