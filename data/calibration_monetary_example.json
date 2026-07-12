@@ -1,0 +1,24 @@
+{
+  "experiments": [],
+  "platform_conversions": [],
+  "prior_beliefs": [
+    {
+      "channel": "meta",
+      "expected_roi_low": 0.8,
+      "expected_roi_high": 1.6,
+      "metric": "monetary_roi",
+      "confidence": "medium",
+      "source": "Synthetic compatibility fixture"
+    },
+    {
+      "channel": "search",
+      "expected_roi_low": 1.0,
+      "expected_roi_high": 2.0,
+      "metric": "monetary_roi",
+      "confidence": "medium",
+      "source": "Synthetic compatibility fixture"
+    }
+  ],
+  "control_variables": {},
+  "notes": "Synthetic monetary calibration used only by the manually authorized paid compatibility smoke workflow."
+}

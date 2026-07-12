@@ -17,6 +17,8 @@ on:
           - standard
           - extended
           - national
+          - holdout
+          - calibration
 
 permissions:
   contents: read
@@ -50,12 +52,21 @@ jobs:
         run: |
           if [ "$MODEL_SHAPE" = "standard" ]; then
             echo "MMM_DATA=data/examples/meridian_sample.csv" >> "$GITHUB_ENV"
+            echo "MMM_EXTRA_ARGS=" >> "$GITHUB_ENV"
           elif [ "$MODEL_SHAPE" = "national" ]; then
             uv run --frozen python -m mmm.sample_fixture data/examples/meridian_sample.csv /tmp/model-shape.csv --national
             echo "MMM_DATA=/tmp/model-shape.csv" >> "$GITHUB_ENV"
+            echo "MMM_EXTRA_ARGS=" >> "$GITHUB_ENV"
           else
             uv run --frozen python -m mmm.sample_fixture data/examples/meridian_sample.csv /tmp/model-shape.csv
             echo "MMM_DATA=/tmp/model-shape.csv" >> "$GITHUB_ENV"
+            if [ "$MODEL_SHAPE" = "holdout" ]; then
+              echo "MMM_EXTRA_ARGS=--holdout-weeks 8" >> "$GITHUB_ENV"
+            elif [ "$MODEL_SHAPE" = "calibration" ]; then
+              echo "MMM_EXTRA_ARGS=--calibration data/calibration_monetary_example.json" >> "$GITHUB_ENV"
+            else
+              echo "MMM_EXTRA_ARGS=" >> "$GITHUB_ENV"
+            fi
           fi
       - name: Run reduced-sampling T4 compatibility fit
         run: >-
@@ -65,6 +76,7 @@ jobs:
           --n-keep 100
           --n-adapt 200
           --n-burnin 100
+          $MMM_EXTRA_ARGS
           --report
       - name: Verify result, charts, optimizer, and report contracts
         env:
@@ -73,16 +85,18 @@ jobs:
           if [ "$MODEL_SHAPE" = "standard" ]; then
             uv run --frozen python -m mmm.smoke outputs
           else
+            REQUIRED_SECTIONS="--require-section optimal_frequency --require-section organic_contributions --require-section treatment_effects"
+            if [ "$MODEL_SHAPE" = "holdout" ]; then
+              REQUIRED_SECTIONS="$REQUIRED_SECTIONS --require-section holdout_validation"
+            fi
             uv run --frozen python -m mmm.smoke outputs \
-              --require-section optimal_frequency \
-              --require-section organic_contributions \
-              --require-section treatment_effects
+              $REQUIRED_SECTIONS
           fi
       - name: Upload smoke artifacts
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: modal-smoke-${{ github.run_id }}
+          name: modal-smoke-${{ inputs.model_shape }}-${{ github.run_id }}
           path: outputs/
           if-no-files-found: warn
           retention-days: 7
