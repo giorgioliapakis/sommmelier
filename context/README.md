@@ -1,10 +1,10 @@
 # Context Files
 
-This folder stores brand-specific knowledge that makes Sommmelier's analysis tailored to your business. These files are created during onboarding (`/init`) and updated after each model run (`/sommmelier`).
+This folder stores brand-specific knowledge that makes Sommmelier's analysis tailored to your business. The shared agent onboarding and analysis skills create and update these files.
 
 You can edit any of these files directly -- they're plain markdown.
 
-## Files Created by `/init`
+## Files Created During Onboarding
 
 | File | What it captures |
 |------|-----------------|
@@ -14,7 +14,7 @@ You can edit any of these files directly -- they're plain markdown.
 | `data-sources.md` | Where your data comes from, format, known issues, data readiness assessment |
 | `calibration-rationale.md` | Why calibration priors are set the way they are -- experiment results, platform data, beliefs |
 
-## Files Created by `/sommmelier` (after model runs)
+## Files Updated After Model Analysis
 
 | File | What it captures |
 |------|-----------------|
@@ -23,7 +23,7 @@ You can edit any of these files directly -- they're plain markdown.
 
 ## How They're Used
 
-Every time you run `/sommmelier`, Claude reads these files to:
+During a brand-facing analysis, the agent reads these files to:
 - Reference your specific goals and constraints in recommendations
 - Adapt explanation depth to your experience level
 - Flag when suggestions conflict with your stated constraints
@@ -31,4 +31,4 @@ Every time you run `/sommmelier`, Claude reads these files to:
 
 ## Getting Started
 
-Run `/init` in Claude Code to populate these files through a guided conversation.
+Ask your coding agent to “Onboard my brand for Sommmelier” to populate these files through a guided conversation.

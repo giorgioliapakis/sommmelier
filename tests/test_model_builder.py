@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from mmm.data.schema import DataConfig, MediaChannel, MMMDataset
-from mmm.model.builder import build_meridian_input
+from mmm.data.schema import DataConfig, MediaChannel, MMMDataset, OrganicMediaChannel
+from mmm.model.builder import build_meridian_input, prepare_dataframe_for_meridian
 
 
 def _dataset(
@@ -128,3 +128,79 @@ def test_explicit_estimates_are_visible_in_builder_inputs():
     media_call = next(kwargs for name, kwargs in calls if name == "with_media")
     assert media_call["media_cols"] == ["meta_impressions_est"]
     assert any(name == "with_population" for name, _ in calls)
+
+
+def test_builder_routes_reach_organic_treatment_and_time_varying_controls():
+    calls = []
+    dataset = _dataset()
+    dataset.df["meta_reach"] = [5_000, 6_000]
+    dataset.df["meta_frequency"] = [2.0, 2.1]
+    dataset.df["newsletter_organic"] = [100, 120]
+    dataset.df["promotion_treatment"] = [0.0, 0.2]
+    dataset.df["holiday_control"] = [0, 1]
+    dataset.df["constant_control"] = [1, 1]
+    dataset.config.media_channels = [
+        MediaChannel(
+            name="meta",
+            spend_column="meta_spend",
+            reach_column="meta_reach",
+            frequency_column="meta_frequency",
+        )
+    ]
+    dataset.config.organic_channels = [
+        OrganicMediaChannel(name="newsletter", column="newsletter_organic")
+    ]
+    dataset.config.treatment_columns = ["promotion_treatment"]
+    dataset.config.control_columns = ["holiday_control", "constant_control"]
+
+    with patch.dict(sys.modules, _builder_modules(calls)):
+        assert build_meridian_input(dataset) == "input-data"
+
+    by_name = {name: kwargs for name, kwargs in calls}
+    assert "with_media" not in by_name
+    assert by_name["with_reach"]["rf_channels"] == ["meta"]
+    assert by_name["with_organic_media"]["organic_media_channels"] == ["newsletter"]
+    assert by_name["with_non_media_treatments"]["non_media_treatment_cols"] == [
+        "promotion_treatment"
+    ]
+    assert by_name["with_controls"]["control_cols"] == ["holiday_control"]
+
+
+def test_total_revenue_is_converted_to_revenue_per_kpi():
+    calls = []
+    dataset = _dataset()
+    dataset.df["revenue"] = [100.0, 180.0]
+    dataset.config.revenue_column = "revenue"
+
+    with patch.dict(sys.modules, _builder_modules(calls)):
+        build_meridian_input(dataset)
+
+    revenue_call = next(kwargs for name, kwargs in calls if name == "with_revenue_per_kpi")
+    assert revenue_call["revenue_per_kpi_col"] == "_revenue_per_kpi"
+
+
+def test_nonzero_revenue_with_zero_kpi_is_rejected():
+    dataset = _dataset()
+    dataset.df.loc[0, "conversions"] = 0
+    dataset.df["revenue"] = [100.0, 180.0]
+    dataset.config.revenue_column = "revenue"
+
+    with patch.dict(sys.modules, _builder_modules([])):
+        with pytest.raises(ValueError, match="Revenue cannot be non-zero"):
+            build_meridian_input(dataset)
+
+
+def test_prepare_dataframe_normalizes_types_and_order():
+    frame = pd.DataFrame(
+        {
+            "week": ["2026-01-12", "2026-01-05"],
+            "market": [2, 1],
+            "value": [20, 10],
+        }
+    )
+
+    prepared = prepare_dataframe_for_meridian(frame, "week", "market")
+
+    assert list(prepared.columns) == ["time", "geo", "value"]
+    assert prepared["geo"].tolist() == ["1", "2"]
+    assert prepared["time"].tolist() == list(pd.to_datetime(["2026-01-05", "2026-01-12"]))

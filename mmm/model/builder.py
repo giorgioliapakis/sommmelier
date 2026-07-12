@@ -156,14 +156,12 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
         if treatment_cols:
             builder = builder.with_non_media_treatments(df, non_media_treatment_cols=treatment_cols)
 
-    # Add control variables (only if they vary by geo)
+    # Add control variables when they contain usable variation across time or geo.
     if config.control_columns:
         valid_controls = []
         for col in config.control_columns:
-            if col in df.columns:
-                geo_variation = df.groupby("time")[col].nunique()
-                if (geo_variation > 1).any():
-                    valid_controls.append(col)
+            if col in df.columns and df[col].nunique(dropna=False) > 1:
+                valid_controls.append(col)
 
         if valid_controls:
             builder = builder.with_controls(df, control_cols=valid_controls)

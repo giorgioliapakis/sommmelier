@@ -385,7 +385,50 @@ def compare_to_previous(current: dict[str, Any], previous: dict[str, Any] | None
                 "change_pct": change,
             }
 
+    curr_contributions = current.get("contributions", current.get("channel_contributions", {}))
+    prev_contributions = previous.get("contributions", previous.get("channel_contributions", {}))
+
+    def contribution_percentage(value: Any) -> float:
+        if isinstance(value, dict):
+            return float(value.get("percentage", 0))
+        numeric = float(value)
+        return numeric * 100 if abs(numeric) <= 1 else numeric
+
+    for channel, current_value in curr_contributions.items():
+        if channel not in prev_contributions:
+            continue
+        current_percentage = contribution_percentage(current_value)
+        previous_percentage = contribution_percentage(prev_contributions[channel])
+        comparison["contribution_changes"][channel] = {
+            "previous": previous_percentage,
+            "current": current_percentage,
+            "change_percentage_points": current_percentage - previous_percentage,
+        }
+
     return comparison
+
+
+def _find_previous_result(
+    current: dict[str, Any], current_path: Path, historical: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Select the latest genuinely earlier run, excluding the current result itself."""
+    current_run_id = current.get("run_manifest", {}).get("run_id")
+    current_timestamp = current.get("timestamp")
+    current_resolved = current_path.resolve()
+    candidates = []
+
+    for result in historical:
+        result_path = result.get("_file")
+        if result_path and Path(result_path).resolve() == current_resolved:
+            continue
+        result_run_id = result.get("run_manifest", {}).get("run_id")
+        if current_run_id and result_run_id == current_run_id:
+            continue
+        if current_timestamp and result.get("timestamp", "") >= current_timestamp:
+            continue
+        candidates.append(result)
+
+    return candidates[-1] if candidates else None
 
 
 def generate_analysis(
@@ -396,6 +439,7 @@ def generate_analysis(
 
     This is the main entry point for Claude Code to analyze results.
     """
+    results_path = Path(results_path)
     results = load_results(results_path)
     ready, reason = decision_readiness(results)
     if not ready:
@@ -403,7 +447,7 @@ def generate_analysis(
 
     # Load historical results for comparison
     historical = load_historical_results(outputs_dir)
-    previous = historical[-2] if len(historical) >= 2 else None
+    previous = _find_previous_result(results, results_path, historical)
 
     # Generate recommendations from different analyzers
     all_recommendations = []
@@ -507,6 +551,13 @@ def format_report_for_claude(report: AnalysisReport) -> str:
             direction = "+" if change > 0 else ""
             lines.append(
                 f"  {ch:12s} ROI: {data['previous']:.2f}x → {data['current']:.2f}x ({direction}{change:.1f}%)"
+            )
+        for ch, data in report.week_over_week.get("contribution_changes", {}).items():
+            change = data["change_percentage_points"]
+            direction = "+" if change > 0 else ""
+            lines.append(
+                f"  {ch:12s} contribution: {data['previous']:.1f}% → "
+                f"{data['current']:.1f}% ({direction}{change:.1f} pp)"
             )
 
     # Improvement questions (the self-improving part)
