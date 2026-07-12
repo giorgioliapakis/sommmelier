@@ -40,6 +40,7 @@ This work fixes those highest-risk issues and raises measured line coverage from
 | CLI output contract | `--json` mixed a human preamble into machine output, malformed result files surfaced raw exceptions, and a zero optimization budget silently became the current budget | JSON mode is parseable, file errors are concise, non-positive budgets are rejected before model loading, file URIs are safe, and the CLI is exercised end-to-end |
 | Extended Meridian shapes | Meridian 1.6.2 changed paid-contribution defaults, non-paid interval coordinates, treatment channel names, and configured Altair chart composition | Paid and non-paid extraction is explicit and quantified, treatment provenance is preserved, configured chart mappings compose safely, and a live R&F/organic/treatment/control run verifies the contracts |
 | Direct paid submission | `modal run` performed several readiness checks only after invoking the remote function, so an obviously invalid dataset could start billable GPU compute | Direct runs now execute the shared full local preflight first; a live expected-failure check rejects the 8-week fixture without remote submission |
+| Paid-run options | Explicit population/impression fallback flags were ignored by local preflight, while invalid holdouts were silently skipped only after GPU submission | Preflight now preserves authorized fallback flags and validates holdout bounds before invoking Modal; the GPU path shares the same strict holdout-mask implementation |
 
 ## Remaining risks and opportunities
 

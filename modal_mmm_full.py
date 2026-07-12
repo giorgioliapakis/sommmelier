@@ -429,17 +429,16 @@ def fit_mmm_full(
     # Build holdout mask if requested (out-of-time validation)
     holdout_id = None
     if holdout_weeks and holdout_weeks > 0:
-        n_geos = int(df["geo"].nunique())
-        if holdout_weeks > n_periods // 2:
-            print(
-                f"Warning: holdout_weeks ({holdout_weeks}) > half the data ({n_periods // 2}). Skipping holdout."
-            )
-        else:
-            holdout_id = np.zeros((n_geos, n_periods), dtype=bool)
-            holdout_id[:, -holdout_weeks:] = True
-            print(
-                f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)"
-            )
+        from mmm.validation.holdout import generate_holdout_mask
+
+        holdout_id = generate_holdout_mask(
+            n_geos=int(df["geo"].nunique()),
+            n_periods=n_periods,
+            holdout_weeks=holdout_weeks,
+        )
+        print(
+            f"Holdout validation: last {holdout_weeks} weeks held out ({holdout_id.sum()} observations)"
+        )
 
     # Determine knot strategy: AKS vs manual
     use_aks_min_periods = 26
@@ -967,7 +966,7 @@ def main(
         load_calibration,
     )
     from mmm.observability import configure_run_logger, log_event, new_run_id
-    from mmm.preflight import preflight_data_path
+    from mmm.preflight import preflight_data_path, validate_paid_run_request
     from mmm.result_manifest import finalize_run_manifest, record_section_error
 
     data_path = Path(data)
@@ -978,7 +977,13 @@ def main(
     run_logger = configure_run_logger(run_id, "local")
     log_event(run_logger, "input_read_started", data_path=str(data_path))
     print(f"Reading data from {data_path}...")
-    dataset = preflight_data_path(data_path, kpi_column=kpi_column)
+    dataset = preflight_data_path(
+        data_path,
+        kpi_column=kpi_column,
+        allow_population_estimates=allow_population_estimates,
+        allow_impression_estimates=allow_impression_estimates,
+    )
+    validate_paid_run_request(dataset, holdout_weeks=holdout_weeks)
     log_event(
         run_logger,
         "input_preflight_completed",

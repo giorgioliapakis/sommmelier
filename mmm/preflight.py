@@ -5,11 +5,25 @@ from pathlib import Path
 from mmm.data import load_mmm_data, validate_dataset
 from mmm.data.schema import DataConfig, MMMDataset
 from mmm.data.validator import check_meridian_compatibility
+from mmm.validation.holdout import generate_holdout_mask
 
 
-def preflight_data_path(path: Path | str, *, kpi_column: str = "conversions") -> MMMDataset:
+def preflight_data_path(
+    path: Path | str,
+    *,
+    kpi_column: str = "conversions",
+    allow_population_estimates: bool = False,
+    allow_impression_estimates: bool = False,
+) -> MMMDataset:
     """Validate a data path completely before a Modal remote call is allowed."""
-    dataset = load_mmm_data(path, DataConfig(kpi_column=kpi_column))
+    dataset = load_mmm_data(
+        path,
+        DataConfig(
+            kpi_column=kpi_column,
+            allow_population_estimates=allow_population_estimates,
+            allow_impression_estimates=allow_impression_estimates,
+        ),
+    )
     report = validate_dataset(dataset)
     compatibility_issues = check_meridian_compatibility(dataset)
     if not report.passed or compatibility_issues:
@@ -21,3 +35,15 @@ def preflight_data_path(path: Path | str, *, kpi_column: str = "conversions") ->
         problems.extend(compatibility_issues)
         raise ValueError("MMM data preflight failed: " + "; ".join(problems))
     return dataset
+
+
+def validate_paid_run_request(dataset: MMMDataset, *, holdout_weeks: int = 0) -> None:
+    """Reject invalid paid-run options before any remote function is invoked."""
+    if holdout_weeks < 0:
+        raise ValueError("holdout_weeks cannot be negative")
+    if holdout_weeks:
+        generate_holdout_mask(
+            n_geos=dataset.n_geos,
+            n_periods=dataset.n_time_periods,
+            holdout_weeks=holdout_weeks,
+        )
