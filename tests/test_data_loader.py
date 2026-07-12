@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from mmm.data.loader import load_mmm_data
+from mmm.data.loader import load_mmm_data, load_mmm_dataframe
 from mmm.data.schema import DataConfig
 
 
@@ -99,3 +100,16 @@ def test_revenue_kpi_sets_revenue_model_type(sample_data_path: Path):
     dataset = load_mmm_data(sample_data_path, DataConfig(kpi_column="revenue"))
 
     assert dataset.config.kpi_type == "revenue"
+
+
+def test_in_memory_loader_matches_path_loader(meridian_data_path: Path):
+    frame = pd.read_csv(meridian_data_path)
+
+    from_frame = load_mmm_dataframe(frame)
+    from_path = load_mmm_data(meridian_data_path)
+
+    assert from_frame.config == from_path.config
+    assert from_frame.n_geos == from_path.n_geos
+    assert from_frame.n_time_periods == from_path.n_time_periods
+    assert from_frame.total_spend == from_path.total_spend
+    assert from_frame.total_kpi == from_path.total_kpi
