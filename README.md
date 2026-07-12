@@ -6,7 +6,7 @@
 
 Sommmelier is an agent-driven MMM that fits your model, diagnoses what's limiting it, and tells you what to change before the next run.
 
-Runs [Google Meridian](https://github.com/google/meridian) on GPU via [Modal](https://modal.com) (~$0.30/run). Uses [Claude Code](https://code.claude.com/docs/en/overview) as the analyst layer.
+Runs [Google Meridian](https://github.com/google/meridian) on GPU via [Modal](https://modal.com) (~$0.30/run). Shared `.agents` skills let compatible coding agents act as the analyst layer.
 
 ## What it does
 
@@ -33,7 +33,7 @@ Suggestions are tracked across runs. Act on one, re-run, and see whether it help
 - Python 3.11 or 3.12
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) for reproducible installs
 - A [Modal](https://modal.com) account (free tier available, this is where the model runs on GPU)
-- [Claude Code](https://code.claude.com/docs/en/overview) (recommended, acts as your MMM analyst)
+- A coding agent that supports project skills, such as Claude Code or Codex (recommended for personalized analysis)
 
 ### Install
 
@@ -49,27 +49,24 @@ uv run modal setup
 The committed `uv.lock` reproduces the tested dependency set. If you do not use
 uv, `pip install -e .` remains supported but may resolve newer transitive dependencies.
 
-### Option A: Guided experience (Claude Code)
+### Option A: Guided agent experience
 
-If you have [Claude Code](https://code.claude.com/docs/en/overview), open it in this project directory:
+Open a compatible coding agent in this project and ask naturally for the workflow you need. The canonical skills live in `.agents/skills`; compatibility symlinks expose the same files to Claude Code and Codex.
 
 ```bash
-# 1. Start Claude Code in the project
+# Start Claude Code, for example
 claude
-
-# 2. Set up your brand context (guided conversation)
-/init
-
-# 3. Try with example data first
-/walkthrough
-
-# 4. Or run on your own data
-/sommmelier data/raw/your_data.csv
 ```
 
-`/init` asks about your brand, channels, KPIs, and goals. It saves everything to `context/` files that make future analysis specific to your situation, and adjusts how technical or hand-holdy it is based on your experience level.
+Example prompts:
 
-`/sommmelier` runs the model, tests parameter variations if it thinks they'd help, reads your brand context, and writes recommendations that reference your specific goals and constraints.
+- “Onboard my brand for Sommmelier.”
+- “Walk me through the bundled example.”
+- “Analyze my latest MMM result.”
+- “Run Sommmelier on `data/raw/your_data.csv`.”
+- “Explore moving $5,000 from Meta to Search.”
+
+The onboarding skill asks about your brand, channels, KPIs, and goals. The analysis skill validates decision readiness, reads brand context, and writes recommendations tied to specific goals and constraints.
 
 ### Option B: CLI only
 
@@ -141,7 +138,7 @@ These are NOT auto-detected. You add them as columns to your CSV. The model pick
 
 1. **Incrementality experiments** (strongest). Geo-lift tests, holdout experiments, or platform lift studies. These dramatically tighten confidence intervals. The system will recommend which channels to test and how.
 
-2. **Platform-reported outcomes** (useful as a ceiling). Attributed conversion or revenue outcomes from Meta Ads Manager or Google Ads. The model treats these as a soft upper bound since platforms tend to overclaim by 2-5x. You provide these numbers during `/init` or by editing `data/calibration.json` directly.
+2. **Platform-reported outcomes** (useful as a ceiling). Attributed conversion or revenue outcomes from Meta Ads Manager or Google Ads. The model treats these as a soft upper bound since platforms tend to overclaim by 2-5x. Provide these during agent-guided onboarding or by editing `data/calibration.json` directly.
 
 3. **Your team's beliefs** (better than nothing). "We think Meta returns about 1-2x" with a confidence level. Even rough estimates beat the model's default (wide-open priors centered around 1x).
 
@@ -178,7 +175,7 @@ See [`data/examples/sample_data.csv`](data/examples/sample_data.csv) for a compl
     FIRST RUN                          ONGOING
     ─────────                          ───────
 
-    /init                              /sommmelier
+    Onboard brand                     Analyze latest result
      │                                  │
      ├─ Brand context                   ├─ Baseline run on GPU
      ├─ Data assessment      ┌─────>    ├─ Assess diagnostics
@@ -195,7 +192,7 @@ See [`data/examples/sample_data.csv`](data/examples/sample_data.csv) for a compl
                                                     │                     │
                                                     │  you act on these   │
                                                     │                     │
-                                                    └─────> /sommmelier ──┘
+                                                    └─────> analyze again ─┘
                                                             (next run)
 ```
 
@@ -256,11 +253,14 @@ outputs/
 
 ```
 sommmelier/
-├── .claude/commands/          # Claude Code slash commands
-│   ├── init.md                #   /init (onboarding)
-│   ├── sommmelier.md          #   /sommmelier (analysis)
-│   └── walkthrough.md         #   /walkthrough (guided demo)
-├── context/                   # Brand-specific knowledge (created by /init)
+├── .agents/                   # Canonical cross-agent instructions
+│   ├── AGENTS.md              #   Concise execution contract
+│   └── skills/                #   Onboarding, analysis, scenario, walkthrough
+├── .claude/skills -> ../.agents/skills
+├── .codex/skills -> ../.agents/skills
+├── AGENTS.md -> .agents/AGENTS.md
+├── CLAUDE.md -> .agents/AGENTS.md
+├── context/                   # Brand-specific knowledge from onboarding
 ├── mmm/                       # Core Python package
 │   ├── cli/                   #   CLI commands
 │   ├── data/                  #   Data loading, validation, schemas
@@ -273,7 +273,6 @@ sommmelier/
 │   ├── raw/                   #   Your data (gitignored)
 │   └── examples/              #   Sample datasets
 ├── outputs/                   #   Model results (gitignored)
-├── CLAUDE.md                  #   Instructions for the AI analyst
 ├── run_weekly.py              #   Full pipeline: validate → fit → report → analyze
 └── modal_mmm_full.py          #   GPU model fitting (runs on Modal)
 ```

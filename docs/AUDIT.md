@@ -6,7 +6,7 @@ Audit date: 2026-07-11
 
 Sommmelier has a compelling product shape: local data checks, GPU fitting, model diagnostics, reporting, recommendations, calibration, and longitudinal quality tracking are all present. The project is still alpha-quality, however. Before this audit, several paths could produce confident-looking but incorrect output: an asynchronous weekly run could select an old result, non-monetary KPI efficiency could be described as profit, malformed panel data could reach paid GPU fitting, and calibration parameters mixed linear and log scales.
 
-This work fixes those highest-risk issues and raises measured line coverage from 8% to 63%. The project is substantially safer to experiment with, but still needs more real-data coverage before it should be treated as an unattended production decision system.
+This work fixes those highest-risk issues and raises measured line coverage from 8% to 74%. The project is substantially safer to experiment with, but still needs more real-data coverage before it should be treated as an unattended production decision system.
 
 ## What was fixed
 
@@ -34,6 +34,9 @@ This work fixes those highest-risk issues and raises measured line coverage from
 | Test setup | A plain test run required an optional coverage plugin | Coverage is now opt-in at the command line; a normal `pytest` run works |
 | Quality gates | Ruff reported 200 issues and strict mypy reported 97 errors while neither ran in CI | The repository is formatted, Ruff and strict mypy pass, and both are enforced on Python 3.11 and 3.12 |
 | Observability | Local and remote print logs could not be reliably correlated | Structured JSON events now carry one run ID across submission, sampling, completion, downloads, artifacts, and quality history |
+| Historical comparisons | Analysis assumed the current result occupied a specific position in `outputs/`, so external or future-dated files could select the wrong baseline; contribution deltas were never populated | Prior-run selection now excludes the current run by path and ID, respects timestamps, and reports contribution percentage-point changes |
+| Time-varying controls | Controls were retained only when they varied across geographies at the same time, dropping valid national and time-varying controls | Any non-constant configured control is now passed to Meridian; constant controls remain excluded |
+| Agent tooling | A 210-line Claude-only instruction file and 731 lines of obsolete slash commands duplicated workflows | `.agents` is canonical, four intent-triggered skills replace slash commands, and root/Claude/Codex entry points are relative symlinks to the same files |
 
 ## Remaining risks and opportunities
 
@@ -43,21 +46,21 @@ This work fixes those highest-risk issues and raises measured line coverage from
 
 2. **Finish extracting the Modal implementation into package modules.** The divergent legacy runner is retired and release-sensitive tensor, diagnostics, review, chart, and optimizer adapters are shared. Input construction and several optional result sections still live in `modal_mmm_full.py`; move them into testable package modules until Modal is only a compute adapter.
 
-3. **Automate the paid GPU boundary.** Manual T4 smoke tests now verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. Add a manually triggered, budget-capped GitHub workflow using the included sample; keep it out of ordinary pull requests to avoid surprise spend.
+3. **Keep the paid GPU boundary deliberate.** Manual T4 smoke tests verify Meridian 1.6.2 tensor dimensions, analyzer schemas, ModelReviewer parsing, optimizer allocations, chart download, and HTML rendering. The `Paid Modal compatibility smoke` workflow now provides an explicit confirmation gate, reduced sampling, a 20-minute job timeout, artifact-contract verification, and seven-day artifact retention. It remains outside ordinary pull requests to avoid surprise spend; repository secrets `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` are required.
 
 4. **Exercise more live model shapes.** The current paid smoke covers the geo-level spend-and-impressions sample. Add budget-capped R&F, organic, treatment, holdout, calibration, national-model, and expected-failure fixtures so those branches cannot drift silently.
 
 ### P2 — next hardening pass
 
-1. Raise coverage around CLI commands and the recommendation engine. Overall coverage is now 63%; local reports are at 75%, insights 80%, tracking 65%, the improvement advisor 51%, and the model builder 57%.
+1. Raise coverage around CLI commands and the improvement advisor. Overall coverage is now 74%; the recommendation engine is at 91%, model builder 92%, local reports 75%, insights 80%, tracking 65%, improvement advisor 60%, and CLI 27%.
 2. Add model-bundle compatibility tests against a small genuinely fitted Meridian artifact, not only the isolated serializer contract.
 
 ## Verification performed
 
-- `uv run --frozen pytest -q`: 90 passed
-- `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 63% total coverage
+- `uv run --frozen pytest -q`: 103 passed
+- `uv run --frozen pytest -q --cov=mmm --cov-report=term`: 74% total coverage
 - `uv run --frozen ruff check .` and `ruff format --check .`: passed repository-wide
-- `uv run --frozen mypy mmm`: strict typing passed for all 26 source files
+- `uv run --frozen mypy mmm`: strict typing passed for all 28 source files
 - `python3 -m compileall`: passed
 - `git diff --check`: passed
 - CLI failure contract tested through Typer's runner
@@ -65,6 +68,8 @@ This work fixes those highest-risk issues and raises measured line coverage from
 - Follow-up manifest smoke: technical status `complete`, quality status `failed` for the deliberately under-sampled fit, visible HTML warning, and CLI recommendation blocking
 - Calibration mismatch preflight: rejected incompatible units before the remote GPU function was invoked
 - Structured preflight logs: valid JSON event with the same run ID used by the manifest and remote call
+- Local smoke verifier: required manifest sections, 10 distinct PNGs, optimizer allocation, and HTML report validated against the live artifact
+- Agent layout: all four instruction/skills symlinks resolve, legacy `.claude/commands` is absent, and every skill has valid discovery metadata
 - Locked dependency graph generated with uv; CI covers Python 3.11 and 3.12, tests, Ruff lint/format, strict mypy, package build, and CLI startup
 
 ## Recommended build sequence

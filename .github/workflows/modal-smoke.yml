@@ -1,0 +1,56 @@
+name: Paid Modal compatibility smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_paid_run:
+        description: Confirm this manually triggered workflow will incur a small Modal GPU charge
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paid-modal-compatibility-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: ${{ inputs.confirm_paid_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install locked runtime
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - name: Verify Modal credentials are configured
+        run: uv run --frozen modal token info
+      - name: Run reduced-sampling T4 compatibility fit
+        run: >-
+          uv run --frozen modal run modal_mmm_full.py
+          --data data/examples/meridian_sample.csv
+          --n-chains 2
+          --n-keep 100
+          --n-adapt 200
+          --n-burnin 100
+          --report
+      - name: Verify result, charts, optimizer, and report contracts
+        run: uv run --frozen python -m mmm.smoke outputs
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: modal-smoke-${{ github.run_id }}
+          path: outputs/
+          if-no-files-found: warn
+          retention-days: 7
