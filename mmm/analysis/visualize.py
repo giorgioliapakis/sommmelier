@@ -274,14 +274,7 @@ def interpret_roi(roi: float, roi_is_monetary: bool = True) -> str:
     """Return plain English interpretation of ROI."""
     if not roi_is_monetary:
         return f"{roi:.4f} incremental KPI units per currency unit spent"
-    if roi >= 2.0:
-        return "Excellent - every $1 spent returns $" + f"{roi:.2f}"
-    elif roi >= 1.0:
-        return "Good - profitable investment"
-    elif roi >= 0.5:
-        return "Moderate - some return but below breakeven"
-    else:
-        return "Low - consider reducing spend"
+    return f"{roi:.2f} incremental revenue per currency unit spent; assess uncertainty and margins"
 
 
 def interpret_marginal_roi(avg_roi: float, mroi: float) -> str:

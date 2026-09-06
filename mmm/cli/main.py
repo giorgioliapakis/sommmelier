@@ -281,7 +281,11 @@ def optimize(
     console.print(f"Optimizing for budget: ${target_budget:,.2f}\n")
 
     with console.status("Running optimization..."):
-        allocation = mmm.optimize_budget(budget=target_budget)
+        try:
+            allocation = mmm.optimize_budget(budget=target_budget)
+        except ValueError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(2) from exc
 
     table = Table(title="Optimal Budget Allocation")
     table.add_column("Channel", style="cyan")

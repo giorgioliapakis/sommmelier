@@ -63,5 +63,5 @@ def test_non_monetary_local_report_avoids_profitability_claims():
     assert "Channel KPI Efficiency" in report
     assert "1.8000 KPI/currency" in report
     assert "Break-even" not in report
-    assert insights[0].title == "meta has the highest KPI efficiency"
-    assert "profitability claims" in insights[0].recommendation
+    assert insights[0].title == "Recommendations blocked"
+    assert "Recommendations blocked" in report

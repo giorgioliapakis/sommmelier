@@ -41,13 +41,13 @@ def test_find_latest_results_finds_simple_result_when_stale_full_result_exists(
     assert find_latest_results(exclude={stale}).resolve() == fresh.resolve()
 
 
-def test_decision_readiness_requires_complete_run_and_passed_quality(tmp_path: Path):
+def test_decision_readiness_rejects_passed_manifest_without_results(tmp_path: Path):
     result = tmp_path / "result.json"
     result.write_text('{"run_manifest": {"status": "complete", "quality_status": "passed"}}')
 
     assert decision_readiness(result) == (
-        True,
-        "run complete and model quality passed",
+        False,
+        "required section roi is missing or invalid",
     )
 
 

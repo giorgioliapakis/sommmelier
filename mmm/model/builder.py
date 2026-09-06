@@ -46,7 +46,7 @@ def build_meridian_input(dataset: MMMDataset) -> "input_data.InputData":
 
     # Add population (REQUIRED for geo-level models)
     if config.population_column and config.population_column in df.columns:
-        builder = builder.with_population(df, population_column=config.population_column)
+        builder = builder.with_population(df, population_col=config.population_column)
     elif "population" in df.columns:
         builder = builder.with_population(df)
     else:

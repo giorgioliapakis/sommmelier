@@ -15,6 +15,13 @@ from mmm.meridian_compat import (
     summarize_channel_tensor,
 )
 from mmm.model.builder import build_meridian_input
+from mmm.result_manifest import (
+    create_run_manifest,
+    decision_readiness,
+    finalize_run_manifest,
+    finite_number,
+    record_section_error,
+)
 
 if TYPE_CHECKING:
     from meridian.model import model as meridian_model
@@ -59,9 +66,33 @@ class ModelResults:
     # Diagnostics
     convergence_passed: bool = False
     r_hat_max: float | None = None
+    roi_intervals: dict[str, dict[str, float]] = field(default_factory=dict)
+    run_manifest: dict[str, Any] = field(default_factory=dict)
+    model_review: dict[str, Any] = field(default_factory=dict)
 
     # Raw model reference
     meridian_model: Any = None
+
+    def to_result_payload(self) -> dict[str, Any]:
+        """Use the same decision contract as remote results, including saved bundles."""
+        return {
+            "run_manifest": self.run_manifest,
+            "metadata": {"roi_is_monetary": self.roi_is_monetary},
+            "roi": {
+                channel: {**self.roi_intervals.get(channel, {}), "mean": mean}
+                for channel, mean in self.channel_roi.items()
+            },
+            "contributions": {
+                channel: {"absolute": value}
+                for channel, value in self.channel_contributions.items()
+            },
+            "model_fit": {"r_squared": self.r_squared, "mape": self.mape},
+            "diagnostics": {
+                "diagnostics_available": finite_number(self.r_hat_max),
+                "convergence_ok": self.convergence_passed,
+            },
+            "model_review": self.model_review,
+        }
 
     def summary(self) -> str:
         """Return human-readable summary of results."""
@@ -137,34 +168,28 @@ class AutoMMM:
             calibration_priors: Per-channel priors from calibration module.
                 Keys are channel names, values have roi_mean, roi_sigma, source.
         """
-        import tensorflow_probability as tfp
-        from meridian.model import model, prior_distribution, spec
+        from meridian.model import model, spec
 
-        # Build Meridian InputData from our dataset
+        from mmm.model.priors import build_roi_prior
+
         self._input_data = build_meridian_input(self.dataset)
-
-        # Configure per-channel priors (single batched LogNormal with batch_shape=[n_channels])
-        if calibration_priors:
-            roi_means = []
-            roi_sigmas = []
-            for ch in self.dataset.media_channels:
-                if ch in calibration_priors:
-                    p = calibration_priors[ch]
-                    roi_means.append(p["roi_mean"])
-                    roi_sigmas.append(p["roi_sigma"])
-                else:
-                    roi_means.append(self.config.roi_prior_mean)
-                    roi_sigmas.append(self.config.roi_prior_sigma)
-            prior = prior_distribution.PriorDistribution(
-                roi_m=tfp.distributions.LogNormal(roi_means, roi_sigmas)
-            )
-        else:
-            prior = prior_distribution.PriorDistribution(
-                roi_m=tfp.distributions.LogNormal(
-                    self.config.roi_prior_mean,
-                    self.config.roi_prior_sigma,
-                )
-            )
+        media = [
+            ch.name
+            for ch in self.dataset.config.media_channels
+            if not (ch.reach_column and ch.frequency_column)
+        ]
+        rf = [
+            ch.name
+            for ch in self.dataset.config.media_channels
+            if ch.reach_column and ch.frequency_column
+        ]
+        prior = build_roi_prior(
+            media,
+            rf,
+            calibration_priors,
+            default_mean=self.config.roi_prior_mean,
+            default_sigma=self.config.roi_prior_sigma,
+        )
 
         # Use AKS when dataset is large enough, fall back to manual knots
         n_periods = self.dataset.n_time_periods
@@ -226,6 +251,14 @@ class AutoMMM:
 
         # Extract results
         self._results = self._extract_results()
+        self._results.run_manifest = create_run_manifest()
+        payload = self._results.to_result_payload()
+        try:
+            self._results.model_review = self.review()
+            payload["model_review"] = self._results.model_review
+        except Exception as exc:
+            record_section_error(payload, "model_review", exc)
+        finalize_run_manifest(payload)
 
         return self._results
 
@@ -238,20 +271,22 @@ class AutoMMM:
 
         mmm_analyzer = analyzer.Analyzer(self._meridian)
         results = ModelResults(meridian_model=self._meridian)
+        configured = self.dataset.config.media_channels
+        channels = [ch.name for ch in configured if not (ch.reach_column and ch.frequency_column)]
+        channels += [ch.name for ch in configured if ch.reach_column and ch.frequency_column]
         results.roi_is_monetary = bool(
             self.dataset.config.kpi_type == "revenue"
             or self.dataset.config.revenue_per_kpi_column
             or self.dataset.config.revenue_column
         )
 
-        roi = summarize_channel_tensor(
-            mmm_analyzer.roi(use_posterior=True), self.dataset.media_channels
-        )
+        roi = summarize_channel_tensor(mmm_analyzer.roi(use_posterior=True), channels)
         results.channel_roi = {channel: summary["mean"] for channel, summary in roi.items()}
+        results.roi_intervals = roi
 
         contributions = extract_channel_contributions(
-            mmm_analyzer.incremental_outcome(use_posterior=True),
-            self.dataset.media_channels,
+            mmm_analyzer.incremental_outcome(use_posterior=True, include_non_paid_channels=False),
+            channels,
         )
         results.channel_contributions = {
             channel: summary["absolute"] for channel, summary in contributions.items()
@@ -310,6 +345,14 @@ class AutoMMM:
                 "Per-channel constraints are not supported by this wrapper yet; "
                 "omit constraints rather than assuming they were applied"
             )
+
+        if self._results is None:
+            raise ValueError("Recommendations blocked: model results are unavailable")
+        ready, reason = decision_readiness(self._results.to_result_payload())
+        if not ready:
+            raise ValueError(f"Recommendations blocked: {reason}")
+        if budget is not None and (not finite_number(budget) or budget <= 0):
+            raise ValueError("Budget must be finite and greater than zero")
 
         from meridian.analysis import optimizer
 

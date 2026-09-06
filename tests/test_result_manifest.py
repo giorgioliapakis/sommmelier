@@ -1,5 +1,7 @@
 """Tests for technical run state and independent model-quality state."""
 
+import pytest
+
 from mmm.result_manifest import (
     create_run_manifest,
     decision_readiness,
@@ -83,3 +85,25 @@ def test_decision_readiness_requires_both_completeness_and_quality():
 
     results["run_manifest"]["quality_status"] = "failed"
     assert decision_readiness(results) == (False, "model quality status is failed")
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), True, "0.8"])
+@pytest.mark.parametrize(
+    "section,key", [("model_fit", "r_squared"), ("model_fit", "mape"), ("roi", "mean")]
+)
+def test_invalid_numbers_cannot_be_decision_ready(bad, section, key):
+    results = _complete_results()
+    finalize_run_manifest(results)
+    target = results[section]["meta"] if section == "roi" else results[section]
+    target[key] = bad
+    # Even an existing passed manifest must not bypass content validation.
+    assert decision_readiness(results)[0] is False
+    assert finalize_run_manifest(results)["status"] == "failed"
+
+
+def test_inverted_or_partial_intervals_are_rejected():
+    results = _complete_results()
+    results["roi"]["meta"].update(ci_lower=2.0, ci_upper=1.0)
+    assert finalize_run_manifest(results)["status"] == "failed"
+    del results["roi"]["meta"]["ci_upper"]
+    assert finalize_run_manifest(results)["status"] == "failed"

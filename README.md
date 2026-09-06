@@ -206,10 +206,10 @@ Channel ROI:
   meta   : 0.85x  (90% CI: 0.52 - 1.21)
   google : 1.42x  (90% CI: 0.89 - 2.05)
 ```
-- These profitability bands apply only when the result metadata says `roi_is_monetary: true`.
-- **> 1.5x**: Strong performer, consider scaling
-- **1.0 - 1.5x**: Profitable, maintain or test scaling
-- **< 1.0x**: Underperforming, needs investigation
+- Monetary ROI measures incremental revenue per currency unit spent, not profit.
+- Compare uncertainty intervals and business margins before considering changes.
+- Use constrained optimizer scenarios to explore allocations; average ROI alone
+  does not establish where the next dollar should go.
 
 ### CPIK (Cost per Incremental KPI)
 ```
@@ -218,7 +218,9 @@ CPIK (Cost per Incremental KPI):
   google : $6.30
   tiktok : $13.84
 ```
-The inverse of ROI in dollar terms. If your target CPA is $10, any channel with CPIK below $10 is profitable. More intuitive than ROI for budget discussions.
+CPIK is spend per incremental KPI unit: the inverse of KPI-per-currency efficiency.
+It is not generally the inverse of monetary ROI. Compare it with an economically
+justified target cost per KPI; profitability also depends on margins and other costs.
 
 ### Marginal vs average ROI
 ```
@@ -291,6 +293,10 @@ sommmelier/
 ## Contributing
 
 Pull requests welcome. For major changes, open an issue first.
+
+Run the locked test suite with `uv run --frozen pytest -q --cov=mmm`.
+See [synthetic evaluations](evals/README.md) for reproducible dummy datasets,
+ground-truth scoring, and the separately authorized GPU compatibility run.
 
 ## License
 
