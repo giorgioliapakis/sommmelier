@@ -68,6 +68,7 @@ Thumbs.db
 # Internal docs (not for public repo)
 internal-docs/
 .conductor/
+.context/
 
 # Real client calibration data
 data/calibration.json

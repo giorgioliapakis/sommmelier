@@ -27,7 +27,7 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev
       - name: Run tests
-        run: uv run --frozen pytest -q
+        run: uv run --frozen pytest -q --cov=mmm --cov-report=term
       - name: Run semantic lint checks
         run: uv run --frozen ruff check .
       - name: Check formatting
