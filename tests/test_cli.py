@@ -48,10 +48,10 @@ def _decision_ready_results() -> dict[str, object]:
             "estimated_impression_channels": [],
         },
         "roi": {"meta": {"mean": 1.2, "ci_lower": 1.0, "ci_upper": 1.4}},
-        "contributions": {"meta": {"percentage": 50}},
+        "contributions": {"meta": {"absolute": 10.0, "percentage": 50}},
         "marginal_roi": {"meta": 1.1},
         "model_fit": {"r_squared": 0.8, "mape": 0.1},
-        "diagnostics": {"convergence_ok": True, "rhat_warnings": 0},
+        "diagnostics": {"diagnostics_available": True, "convergence_ok": True, "rhat_warnings": 0},
         "optimization": {"current": {"optimal_allocation": {"meta": 100.0}}},
     }
 
@@ -221,6 +221,19 @@ def test_optimize_rejects_nonpositive_budget_before_loading_model():
 
     assert result.exit_code == 1
     assert "Budget must be greater than zero" in result.output
+
+
+def test_optimize_cli_reports_readiness_failure(monkeypatch):
+    from mmm.model.mmm import AutoMMM
+
+    model = AutoMMM.__new__(AutoMMM)
+    model._meridian = object()
+    model._results = ModelResults()
+    model.dataset = SimpleNamespace(total_spend=100.0)
+    monkeypatch.setattr(AutoMMM, "load", Mock(return_value=model))
+    result = runner.invoke(app, ["optimize", "model"])
+    assert result.exit_code == 2
+    assert "Recommendations blocked" in result.output
 
 
 def test_optimize_renders_model_allocation(monkeypatch):

@@ -67,135 +67,34 @@ def generate_insights(
     Returns:
         List of prioritized Insight objects
     """
-    insights: list[Insight] = []
+    from mmm.recommendations.engine import analyze_roi
+    from mmm.result_manifest import decision_readiness
 
-    if not results.channel_roi:
-        return insights
-
-    # Sort channels by ROI
-    sorted_roi = sorted(results.channel_roi.items(), key=lambda x: x[1], reverse=True)
-
-    if not results.roi_is_monetary:
-        best_channel, best_efficiency = sorted_roi[0]
-        insights.append(
-            Insight(
-                type=InsightType.EFFICIENCY,
-                priority=InsightPriority.MEDIUM,
-                channel=best_channel,
-                title=f"{best_channel} has the highest KPI efficiency",
-                description=(
-                    f"{best_channel} generated an estimated {best_efficiency:.4f} "
-                    "incremental KPI units per currency unit spent."
-                ),
-                recommendation=(
-                    "Use CPIK and uncertainty intervals for comparison; revenue data is "
-                    "required before making profitability claims."
-                ),
-            )
-        )
-
-    # Monetary-only profitability insights.
-    high_roi_threshold = 1.5
-    for channel, roi in sorted_roi:
-        if results.roi_is_monetary and roi >= high_roi_threshold:
-            insights.append(
-                Insight(
-                    type=InsightType.HIGH_ROI,
-                    priority=InsightPriority.HIGH,
-                    channel=channel,
-                    title=f"{channel} shows strong ROI",
-                    description=f"{channel} has an ROI of {roi:.2f}x, meaning every $1 spent returns ${roi:.2f} in value.",
-                    recommendation=f"Consider increasing {channel} budget if not already at saturation.",
-                    potential_impact=f"Potential {((roi - 1) * 100):.0f}% return on incremental spend",
-                )
-            )
-
-    # Insight 2: Identify low/negative ROI channels
-    low_roi_threshold = 0.8
-    for channel, roi in sorted_roi:
-        if results.roi_is_monetary and roi < low_roi_threshold:
-            insights.append(
-                Insight(
-                    type=InsightType.LOW_ROI,
-                    priority=InsightPriority.HIGH,
-                    channel=channel,
-                    title=f"{channel} underperforming",
-                    description=f"{channel} has an ROI of {roi:.2f}x, returning less than $1 for every $1 spent.",
-                    recommendation=f"Review {channel} strategy. Consider reallocating budget to higher-performing channels.",
-                    potential_impact=f"Currently losing ${(1 - roi):.2f} per dollar spent",
-                )
-            )
-
-    # Insight 3: Contribution vs Spend efficiency (if spend data provided)
-    if channel_spend and results.channel_contributions:
-        total_spend = sum(channel_spend.values())
-        total_contrib = sum(results.channel_contributions.values())
-
-        for channel in results.channel_contributions:
-            if channel not in channel_spend:
-                continue
-
-            spend_share = channel_spend[channel] / total_spend if total_spend > 0 else 0
-            contrib_share = (
-                results.channel_contributions[channel] / total_contrib if total_contrib > 0 else 0
-            )
-
-            efficiency_ratio = contrib_share / spend_share if spend_share > 0 else 0
-
-            if efficiency_ratio > 1.3:  # Contributing more than fair share
-                insights.append(
-                    Insight(
-                        type=InsightType.UNDER_INVESTED,
-                        priority=InsightPriority.MEDIUM,
-                        channel=channel,
-                        title=f"{channel} may be under-invested",
-                        description=f"{channel} receives {spend_share:.1%} of budget but drives {contrib_share:.1%} of results.",
-                        recommendation=f"Test increasing {channel} budget allocation.",
-                        potential_impact=f"Efficiency ratio: {efficiency_ratio:.2f}x",
-                    )
-                )
-            elif efficiency_ratio < 0.7:  # Contributing less than fair share
-                insights.append(
-                    Insight(
-                        type=InsightType.OVER_INVESTED,
-                        priority=InsightPriority.MEDIUM,
-                        channel=channel,
-                        title=f"{channel} may be over-invested",
-                        description=f"{channel} receives {spend_share:.1%} of budget but only drives {contrib_share:.1%} of results.",
-                        recommendation=f"Consider reducing {channel} allocation or optimizing creative/targeting.",
-                        potential_impact=f"Efficiency ratio: {efficiency_ratio:.2f}x",
-                    )
-                )
-
-    # Insight 4: Overall model quality
-    if results.convergence_passed:
-        insights.append(
-            Insight(
-                type=InsightType.EFFICIENCY,
-                priority=InsightPriority.LOW,
-                channel=None,
-                title="Model converged successfully",
-                description="The model passed convergence diagnostics, indicating reliable estimates.",
-                recommendation="Results can be used for budget planning with reasonable confidence.",
-            )
-        )
-    elif results.r_hat_max and results.r_hat_max > 1.2:
-        insights.append(
+    payload = results.to_result_payload()
+    ready, reason = decision_readiness(payload)
+    if not ready:
+        return [
             Insight(
                 type=InsightType.EFFICIENCY,
                 priority=InsightPriority.HIGH,
                 channel=None,
-                title="Model convergence issues detected",
-                description=f"R-hat of {results.r_hat_max:.2f} exceeds 1.2 threshold, indicating potential issues.",
-                recommendation="Consider running model with more iterations or reviewing data quality.",
+                title="Recommendations blocked",
+                description=reason,
+                recommendation="Review diagnostics and refit before making budget decisions.",
             )
+        ]
+
+    return [
+        Insight(
+            type=InsightType.EFFICIENCY,
+            priority=InsightPriority.MEDIUM,
+            channel=None,
+            title=recommendation.title,
+            description=recommendation.detail,
+            recommendation=recommendation.action,
         )
-
-    # Sort by priority
-    priority_order = {InsightPriority.HIGH: 0, InsightPriority.MEDIUM: 1, InsightPriority.LOW: 2}
-    insights.sort(key=lambda x: priority_order[x.priority])
-
-    return insights
+        for recommendation in analyze_roi(payload)
+    ]
 
 
 def insights_to_markdown(insights: list[Insight]) -> str:

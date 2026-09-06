@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from mmm.result_manifest import decision_readiness
+from mmm.result_manifest import decision_readiness, finite_number
 
 from .improvement_advisor import (
     ImprovementQuestion,
@@ -104,106 +104,53 @@ def analyze_roi(results: dict[str, Any]) -> list[Recommendation]:
             )
         ]
 
-    # Sort channels by ROI
-    sorted_channels = sorted(
-        roi_data.items(),
-        key=lambda x: x[1].get("mean", 0) if isinstance(x[1], dict) else x[1],
-        reverse=True,
-    )
+    for channel, summary in roi_data.items():
+        if not isinstance(summary, dict):
+            summary = {"mean": summary}
+        lower, upper = summary.get("ci_lower"), summary.get("ci_upper")
+        if not finite_number(lower) or not finite_number(upper) or lower > upper:
+            interpretation = "Uncertainty intervals are unavailable."
+        elif upper < 1.0:
+            interpretation = "The reported interval is entirely below revenue return of 1x."
+        elif lower > 1.0:
+            interpretation = "The reported interval is entirely above revenue return of 1x."
+        else:
+            interpretation = "The reported interval includes revenue return of 1x."
 
-    # Check for underperforming channels (ROI < 0.5)
-    for ch, data in sorted_channels:
-        roi = data.get("mean", data) if isinstance(data, dict) else data
-
-        if roi < 0.3:
-            recommendations.append(
-                Recommendation(
-                    category="channel",
-                    priority="high",
-                    title=f"Consider pausing {ch.title()}",
-                    detail=f"{ch.title()} has an ROI of {roi:.2f}x, meaning you lose ${1 - roi:.2f} for every $1 spent.",
-                    action=f"Reduce or pause {ch} spend and reallocate to higher-performing channels.",
-                    impact=f"Could save ~${results.get('metadata', {}).get('total_spend', {}).get(ch, 0) * (1 - roi):,.0f}",
-                )
-            )
-        elif roi < 0.5:
-            recommendations.append(
-                Recommendation(
-                    category="channel",
-                    priority="medium",
-                    title=f"{ch.title()} is underperforming",
-                    detail=f"ROI of {roi:.2f}x is below breakeven. Review targeting and creative.",
-                    action="Test new audiences or creative before cutting budget.",
-                    impact=None,
-                )
-            )
-
-    # Check for high-performing channels that could scale
-    best_ch, best_data = sorted_channels[0]
-    best_roi = best_data.get("mean", best_data) if isinstance(best_data, dict) else best_data
-
-    if best_roi > 1.0:
         recommendations.append(
             Recommendation(
                 category="channel",
-                priority="high",
-                title=f"{best_ch.title()} is highly profitable",
-                detail=f"ROI of {best_roi:.2f}x means every $1 returns ${best_roi:.2f}.",
-                action="Test increasing budget if marginal ROI supports it.",
-                impact=None,
+                priority="medium",
+                title=f"Review {channel.title()} revenue return",
+                detail=interpretation
+                + " Revenue return does not account for margins or other costs.",
+                action="Compare uncertainty, business margins, and constrained optimizer scenarios before changing spend.",
             )
         )
-
     return recommendations
 
 
 def analyze_marginal_roi(results: dict[str, Any]) -> list[Recommendation]:
-    """Analyze marginal ROI to find saturation and growth opportunities."""
+    """Describe diminishing returns without deriving unsupported budget changes."""
     recommendations: list[Recommendation] = []
-
     roi_data = results.get("roi", {})
-    mroi_data = results.get("marginal_roi", {})
-
-    if not roi_data:
-        roi_data = {ch: {"mean": val} for ch, val in results.get("channel_roi", {}).items()}
-
-    if not mroi_data:
-        return recommendations
-
-    for ch, mroi in mroi_data.items():
-        avg_roi = roi_data.get(ch, {})
-        avg_roi = avg_roi.get("mean", avg_roi) if isinstance(avg_roi, dict) else avg_roi
-
-        if avg_roi == 0:
+    monetary = results.get("metadata", {}).get("roi_is_monetary", False)
+    unit = "revenue/currency" if monetary else "KPI/currency"
+    for channel, marginal in results.get("marginal_roi", {}).items():
+        summary = roi_data.get(channel, {})
+        average = summary.get("mean") if isinstance(summary, dict) else summary
+        if not finite_number(marginal) or not finite_number(average) or average <= 0:
             continue
-
-        ratio = mroi / avg_roi if avg_roi > 0 else 0
-
-        if ratio < 0.5:
-            # Saturated - marginal ROI much lower than average
+        if marginal < average:
             recommendations.append(
                 Recommendation(
-                    category="budget",
-                    priority="high",
-                    title=f"{ch.title()} is saturated",
-                    detail=f"Marginal ROI ({mroi:.2f}x) is {(1 - ratio) * 100:.0f}% lower than average ROI ({avg_roi:.2f}x).",
-                    action=f"Reduce {ch} budget - you're past the point of diminishing returns.",
-                    impact="Reallocating budget could improve overall ROAS",
-                )
-            )
-        elif ratio > 1.2:
-            # Room to grow - marginal ROI higher than average
-            recommendations.append(
-                Recommendation(
-                    category="budget",
+                    category="channel",
                     priority="medium",
-                    title=f"{ch.title()} has room to scale",
-                    detail=f"Marginal ROI ({mroi:.2f}x) exceeds average ROI ({avg_roi:.2f}x).",
-                    action=f"Test increasing {ch} budget - additional spend should be efficient.",
-                    impact=None,
+                    title=f"{channel.title()} shows diminishing returns",
+                    detail=f"Marginal efficiency is {marginal:.2f} {unit}, below its average of {average:.2f}.",
+                    action="Compare constrained optimizer scenarios and uncertainty; diminishing returns alone does not justify cutting spend.",
                 )
             )
-
     return recommendations
 
 

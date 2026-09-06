@@ -103,13 +103,10 @@ def test_monetary_roi_flags_losses_and_scaling_opportunities():
         }
     )
 
-    assert {recommendation.title for recommendation in recommendations} == {
-        "Search is highly profitable",
-        "Social is underperforming",
-        "Consider pausing Display",
-    }
-    display = next(item for item in recommendations if "Display" in item.title)
-    assert display.impact == "Could save ~$800"
+    assert len(recommendations) == 3
+    assert all("Uncertainty intervals are unavailable" in r.detail for r in recommendations)
+    assert all(r.impact is None for r in recommendations)
+    assert not any("profitable" in r.title or "pausing" in r.title for r in recommendations)
 
 
 def test_marginal_roi_and_concentration_surface_budget_risks():
@@ -122,10 +119,22 @@ def test_marginal_roi_and_concentration_surface_budget_risks():
     concentration = analyze_contributions({"channel_contributions": {"meta": 0.8, "search": 0.2}})
 
     assert [item.title for item in marginal] == [
-        "Meta is saturated",
-        "Search has room to scale",
+        "Meta shows diminishing returns",
     ]
     assert concentration[0].title == "High channel concentration risk"
+
+
+@pytest.mark.parametrize("mean,lower,upper", [(0.2, 0.01, 2.0), (3.0, 0.2, 5.0)])
+def test_wide_intervals_do_not_trigger_pause_or_scale_advice(mean, lower, upper):
+    recommendations = analyze_roi(
+        {
+            "metadata": {"roi_is_monetary": True},
+            "roi": {"meta": {"mean": mean, "ci_lower": lower, "ci_upper": upper}},
+        }
+    )
+    assert "includes revenue return of 1x" in recommendations[0].detail
+    assert "before changing spend" in recommendations[0].action
+    assert recommendations[0].impact is None
 
 
 def test_model_quality_reports_convergence_data_and_uncertainty():
@@ -185,8 +194,8 @@ def test_generate_analysis_selects_latest_earlier_run(tmp_path):
                     "run_manifest": manifest,
                     "metadata": {"roi_is_monetary": True, "n_time_periods": 52},
                     "roi": {"meta": {"mean": roi}},
-                    "contributions": {"meta": {"percentage": 50}},
-                    "diagnostics": {"convergence_ok": True},
+                    "contributions": {"meta": {"absolute": 10.0, "percentage": 50}},
+                    "diagnostics": {"diagnostics_available": True, "convergence_ok": True},
                     "model_fit": {"r_squared": 0.8, "mape": 0.1},
                 }
             )

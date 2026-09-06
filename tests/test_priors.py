@@ -1,29 +1,28 @@
 """Tests for per-channel prior construction."""
 
+import pytest
 
-def _build_prior_arrays(
-    channels: list[str], calibration_priors: dict, default_mean=0.2, default_sigma=0.9
-):
-    """
-    Replicate the per-channel prior logic from modal_mmm_full.py.
+from mmm.model.priors import build_prior_arrays as _build_prior_arrays
 
-    Returns parallel arrays of means and sigmas for constructing a single
-    batched LogNormal(means, sigmas) with batch_shape=[n_channels].
-    """
-    roi_means = []
-    roi_sigmas = []
-    sources = []
-    for ch in channels:
-        if ch in calibration_priors:
-            p = calibration_priors[ch]
-            roi_means.append(p["roi_mean"])
-            roi_sigmas.append(p["roi_sigma"])
-            sources.append(p.get("source", "calibration"))
-        else:
-            roi_means.append(default_mean)
-            roi_sigmas.append(default_sigma)
-            sources.append("default")
-    return roi_means, roi_sigmas, sources
+
+def test_real_meridian_priors_separate_media_and_rf_channels():
+    from mmm.model.priors import build_roi_prior
+
+    prior = build_roi_prior(
+        ["search", "meta"],
+        ["video"],
+        {"meta": {"roi_mean": 0.3, "roi_sigma": 0.5}, "video": {"roi_mean": 0.7, "roi_sigma": 0.4}},
+    )
+    assert prior.roi_m.batch_shape.as_list() == [2]
+    assert prior.roi_rf.batch_shape.as_list() == [1]
+    assert prior.roi_m.loc.numpy().tolist() == pytest.approx([0.2, 0.3])
+    assert prior.roi_rf.loc.numpy().tolist() == pytest.approx([0.7])
+
+
+@pytest.mark.parametrize("sigma", [0, -1, float("nan"), float("inf")])
+def test_production_prior_builder_rejects_invalid_scale(sigma):
+    with pytest.raises(ValueError, match="Invalid LogNormal"):
+        _build_prior_arrays(["meta"], {"meta": {"roi_mean": 0.2, "roi_sigma": sigma}})
 
 
 class TestPerChannelPriors:

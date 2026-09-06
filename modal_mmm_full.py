@@ -166,57 +166,12 @@ def fit_mmm_full(
     print("InputData built successfully")
 
     # Configure model
-    import tensorflow_probability as tfp
-    from meridian.model import model, prior_distribution, spec
+    from meridian.model import model, spec
+
+    from mmm.model.priors import build_roi_prior
 
     n_periods = df["time"].nunique()
-
-    # Configure priors - use calibration data if available
-    # Build per-channel ROI priors: each channel gets its own LogNormal distribution
-    default_roi_mean = 0.2
-    default_roi_sigma = 0.9
-
-    # Meridian's roi_m prior applies to with_media() channels only (spend+impressions).
-    # R&F channels added via with_reach() have separate priors (rf_prior_type on ModelSpec).
-    prior_channels = si_channels  # Only spend+impressions channels get roi_m priors
-
-    if calibration_priors:
-        print(f"Using per-channel calibration priors for media channels: {prior_channels}")
-        # Build parallel arrays of means and sigmas for a single batched LogNormal
-        # Meridian expects roi_m to be a single distribution with batch_shape=[n_media_channels]
-        roi_means = []
-        roi_sigmas = []
-        for ch in prior_channels:
-            if ch in calibration_priors:
-                p = calibration_priors[ch]
-                roi_means.append(p["roi_mean"])
-                roi_sigmas.append(p["roi_sigma"])
-                print(
-                    f"  {ch}: mean={p['roi_mean']:.2f}, sigma={p['roi_sigma']:.2f} (from {p.get('source', 'calibration')})"
-                )
-            else:
-                roi_means.append(default_roi_mean)
-                roi_sigmas.append(default_roi_sigma)
-                print(
-                    f"  {ch}: mean={default_roi_mean}, sigma={default_roi_sigma} (default, no calibration)"
-                )
-
-        # Single LogNormal with batch_shape=[n_media_channels]
-        # If only 1 channel, use scalar to avoid batch_shape issues
-        if len(roi_means) == 1:
-            prior = prior_distribution.PriorDistribution(
-                roi_m=tfp.distributions.LogNormal(roi_means[0], roi_sigmas[0])
-            )
-        else:
-            prior = prior_distribution.PriorDistribution(
-                roi_m=tfp.distributions.LogNormal(roi_means, roi_sigmas)
-            )
-    else:
-        # Default prior (uninformative) - single scalar applies to all channels
-        print("Using default priors (no calibration data provided)")
-        prior = prior_distribution.PriorDistribution(
-            roi_m=tfp.distributions.LogNormal(default_roi_mean, default_roi_sigma)
-        )
+    prior = build_roi_prior(si_channels, rf_channels, calibration_priors)
 
     # Infer adstock type per channel: upper-funnel channels get binomial,
     # direct response channels get geometric (the default).

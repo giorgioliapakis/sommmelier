@@ -73,15 +73,7 @@ Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}
     if results and results.channel_roi:
         for channel, roi in sorted(results.channel_roi.items(), key=lambda x: -x[1]):
             if results.roi_is_monetary:
-                interpretation = (
-                    "Strong performer"
-                    if roi > 1.5
-                    else "Good"
-                    if roi > 1.0
-                    else "Break-even"
-                    if roi > 0.8
-                    else "Underperforming"
-                )
+                interpretation = "Revenue return; assess intervals and margins before decisions"
                 value = f"{roi:.2f}x"
             else:
                 interpretation = "Compare with CPIK and uncertainty; not a profit measure"
@@ -147,22 +139,16 @@ def generate_quick_summary(results: ModelResults, dataset: MMMDataset) -> str:
     if not results.channel_roi:
         return "Model results not available. Please ensure the model has been fitted."
 
-    # Find best and worst channels
-    sorted_roi = sorted(results.channel_roi.items(), key=lambda x: x[1], reverse=True)
-    best_channel, best_roi = sorted_roi[0]
-    worst_channel, worst_roi = sorted_roi[-1]
+    from mmm.result_manifest import decision_readiness
 
-    # Calculate total efficiency
-    total_roi = sum(results.channel_roi.values()) / len(results.channel_roi)
-
-    summary = f"""**MMM Summary ({dataset.date_range[0]} to {dataset.date_range[1]})**
-
-Analyzed ${dataset.total_spend:,.0f} in spend across {len(dataset.media_channels)} channels driving {dataset.total_kpi:,.0f} conversions.
-
-Top performer: **{best_channel}** with {best_roi:.2f}x ROI.
-{"Opportunity: " + worst_channel + " at " + f"{worst_roi:.2f}x ROI needs review." if worst_roi < 1.0 else ""}
-
-Average channel ROI: {total_roi:.2f}x.
-"""
-
-    return summary
+    ready, reason = decision_readiness(results.to_result_payload())
+    if not ready:
+        return f"Recommendations blocked: {reason}"
+    unit = "revenue/currency" if results.roi_is_monetary else "KPI/currency"
+    estimates = ", ".join(
+        f"{channel}: {value:.2f} {unit}" for channel, value in results.channel_roi.items()
+    )
+    return (
+        f"MMM estimates ({dataset.date_range[0]} to {dataset.date_range[1]}): {estimates}. "
+        "Compare uncertainty and business economics before changing spend."
+    )

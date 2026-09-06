@@ -62,6 +62,7 @@ def test_optimize_budget_uses_current_meridian_contract():
     wrapper = AutoMMM.__new__(AutoMMM)
     wrapper._meridian = object()
     wrapper.dataset = SimpleNamespace(total_spend=100.0)
+    wrapper._results = _ready_results()
 
     modules = {
         "meridian": meridian,
@@ -93,8 +94,9 @@ def test_extract_results_uses_shared_meridian_contract():
             assert use_posterior is True
             return _Tensor([[[1.0, 3.0], [3.0, 5.0]]])
 
-        def incremental_outcome(self, *, use_posterior):
+        def incremental_outcome(self, *, use_posterior, include_non_paid_channels):
             assert use_posterior is True
+            assert include_non_paid_channels is False
             return _Tensor([[[[1.0, 3.0], [1.0, 5.0]]]])
 
         def predictive_accuracy(self):
@@ -122,6 +124,10 @@ def test_extract_results_uses_shared_meridian_contract():
     wrapper.dataset = SimpleNamespace(
         media_channels=["meta", "search"],
         config=SimpleNamespace(
+            media_channels=[
+                MediaChannel(name="meta", spend_column="meta_spend"),
+                MediaChannel(name="search", spend_column="search_spend"),
+            ],
             kpi_type="non_revenue",
             revenue_per_kpi_column=None,
             revenue_column=None,
@@ -144,7 +150,8 @@ def test_extract_results_uses_shared_meridian_contract():
     assert results.r_hat_max == 1.05
 
 
-def test_model_bundle_round_trip_uses_safe_formats(tmp_path):
+@pytest.mark.parametrize("ready", [True, False])
+def test_model_bundle_round_trip_uses_safe_formats(tmp_path, ready, monkeypatch):
     saved_model = object()
     loaded_model = object()
 
@@ -190,7 +197,7 @@ def test_model_bundle_round_trip_uses_safe_formats(tmp_path):
     )
     wrapper = AutoMMM(dataset, ModelConfig(n_keep=10))
     wrapper._meridian = saved_model
-    wrapper._results = ModelResults(channel_roi={"meta": 1.2}, meridian_model=saved_model)
+    wrapper._results = _ready_results() if ready else ModelResults(channel_roi={"meta": 1.2})
     bundle = tmp_path / "model"
 
     modules = {
@@ -199,7 +206,11 @@ def test_model_bundle_round_trip_uses_safe_formats(tmp_path):
         "meridian.schema.serde": serde,
         "meridian.schema.serde.meridian_serde": meridian_serde,
     }
-    with patch.dict(sys.modules, modules):
+    # Restore only mocked modules; removing lazily imported PyArrow modules
+    # leaves its native extension registry alive and breaks subsequent cases.
+    with monkeypatch.context() as context:
+        for name, module in modules.items():
+            context.setitem(sys.modules, name, module)
         wrapper.save(bundle)
         restored = AutoMMM.load(bundle)
 
@@ -212,6 +223,12 @@ def test_model_bundle_round_trip_uses_safe_formats(tmp_path):
     assert restored.results.channel_roi == {"meta": 1.2}
     assert restored.dataset.total_spend == 220.0
     assert restored.config.n_keep == 10
+    from mmm.result_manifest import decision_readiness
+
+    assert decision_readiness(restored.results.to_result_payload())[0] is ready
+    if not ready:
+        with pytest.raises(ValueError, match="Recommendations blocked"):
+            restored.optimize_budget()
 
 
 def test_model_bundle_refuses_to_overwrite(tmp_path):
@@ -250,3 +267,74 @@ class _Tensor:
 
     def numpy(self):
         return self._values
+
+
+def _ready_results():
+    from mmm.result_manifest import create_run_manifest, finalize_run_manifest
+
+    results = ModelResults(
+        channel_roi={"meta": 1.2},
+        channel_contributions={"meta": 10.0},
+        r_squared=0.8,
+        mape=0.1,
+        convergence_passed=True,
+        r_hat_max=1.01,
+        run_manifest=create_run_manifest(),
+        model_review={"passed": True},
+    )
+    finalize_run_manifest(results.to_result_payload())
+    return results
+
+
+@pytest.mark.parametrize("state", ["failed", "unknown", "pending"])
+def test_optimizer_blocks_nonpassed_saved_quality(state):
+    wrapper = AutoMMM.__new__(AutoMMM)
+    wrapper._meridian = object()
+    wrapper._results = _ready_results()
+    wrapper._results.run_manifest["quality_status"] = state
+    with pytest.raises(ValueError, match="Recommendations blocked"):
+        wrapper.optimize_budget()
+
+
+@pytest.mark.parametrize("budget", [float("nan"), float("inf"), 0, -1])
+def test_optimizer_rejects_invalid_budget_before_meridian(budget):
+    wrapper = AutoMMM.__new__(AutoMMM)
+    wrapper._meridian = object()
+    wrapper._results = _ready_results()
+    with pytest.raises(ValueError, match="Budget must be finite"):
+        wrapper.optimize_budget(budget=budget)
+
+
+def test_real_mixed_input_model_construction_uses_calibrated_rf_prior(tmp_path):
+    from pathlib import Path
+
+    from mmm.preflight import preflight_data_path
+    from mmm.sample_fixture import build_model_shape_fixture
+
+    source = Path(__file__).parent.parent / "data/examples/meridian_sample.csv"
+    path = tmp_path / "mixed.csv"
+    build_model_shape_fixture(source, path)
+    wrapper = AutoMMM(preflight_data_path(path))
+    wrapper.prepare(calibration_priors={"video": {"roi_mean": 0.7, "roi_sigma": 0.4}})
+    assert wrapper._meridian.model_spec.prior.roi_m.batch_shape.as_list() == [2]
+    assert wrapper._meridian.model_spec.prior.roi_rf.loc.numpy().tolist() == pytest.approx([0.7])
+
+
+@pytest.mark.parametrize("review_state", ["passed", "failed", "error"])
+def test_fit_records_review_and_readiness(monkeypatch, review_state):
+    from unittest.mock import Mock
+
+    from mmm.result_manifest import decision_readiness
+
+    wrapper = AutoMMM.__new__(AutoMMM)
+    wrapper.config = ModelConfig()
+    wrapper._meridian = SimpleNamespace(sample_prior=Mock(), sample_posterior=Mock())
+    monkeypatch.setattr(wrapper, "_extract_results", _ready_results)
+    review = Mock(return_value={"passed": review_state == "passed"})
+    if review_state == "error":
+        review.side_effect = RuntimeError("review unavailable")
+    monkeypatch.setattr(wrapper, "review", review)
+    results = wrapper.fit()
+    assert decision_readiness(results.to_result_payload())[0] is (review_state == "passed")
+    if review_state == "error":
+        assert results.run_manifest["status"] == "degraded"
